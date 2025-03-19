@@ -213,16 +213,23 @@ class OpenBoundaryInventory:
 
     def __init__(self, hgrid, vgrid=None):
         self.hgrid = hgrid
-        self.vgrid = Vgrid.default() if vgrid is None else vgrid
+        if vgrid is None:
+            print('OpenBoundaryInventory using default Vgrid')
+            vgrid = Vgrid.default() 
+        elif isinstance(vgrid, os.PathLike) or  isinstance(vgrid, str):
+            vgrid = Vgrid.open(vgrid)
+        self.vgrid = vgrid
 
     def fetch_data(self, outdir: Union[str, os.PathLike], start_date, rnday, ocean_bnd_ids = [0], elev2D=True, TS=True, UV=True, restart=False, adjust2D=False, lats=None, msl_shifts=None): 
         outdir = pathlib.Path(outdir)
 
         self.start_date = start_date
+        if isinstance(rnday,int):
+            rnday = timedelta(days=rnday)
         self.rnday=rnday
         self.timevector=np.arange(
             self.start_date,
-            self.start_date + timedelta(days=self.rnday+1),
+            self.start_date + self.rnday + timedelta(days=1),
             timedelta(days=1)).astype(datetime)
 
         #Get open boundary 
@@ -239,8 +246,7 @@ class OpenBoundaryInventory:
 
         #calculate zcor for 3D
         if TS or UV:
-            vd=Vgrid.open(self.vgrid)
-            sigma=vd.sigma
+            sigma=self.vgrid.sigma
 
             #get bathymetry
             depth = self.hgrid.values
@@ -260,7 +266,7 @@ class OpenBoundaryInventory:
             #logger.info('Computing SCHISM zcor is done!')
 
         #create netcdf
-        ntimes=self.rnday+1
+        ntimes=self.rnday+timedelta(days=1)
         nComp1=1
         nComp2=2
         one=1
@@ -372,6 +378,7 @@ class OpenBoundaryInventory:
         
             database=get_database(date)
             logger.info(f'Fetching data for {date} from database {database}')
+            print(f'Fetching data for {date} from database {database}')
 
             #loop over each open boundary
             ind1 = 0
@@ -689,6 +696,7 @@ class Nudge:
 
             database=get_database(date)
             logger.info(f'Fetching data for {date} from database {database}')
+            print(f'Fetching data for {date} from database {database}')
 
             ind1 = 0
             ind2 = 0

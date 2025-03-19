@@ -12,7 +12,6 @@ from pyschism.mesh import gridgr3
 
 SFLUX_DEFAULTS = f90nml.read(pathlib.Path(__file__).parent / "sflux_inputs.txt")
 
-
 class NWS2(NWS):
     def __init__(
         self,
@@ -63,8 +62,8 @@ class NWS2(NWS):
         # write sflux data
         if self.sflux_1 is not None:
             self.sflux_1.write(
-                path,
-                1,
+                outdir=path,
+                # level=1,
                 start_date=start_date,
                 rnday=end_date,
                 air=air,
@@ -75,8 +74,8 @@ class NWS2(NWS):
             )
         if self.sflux_2 is not None:
             self.sflux_2.write(
-                path,
-                2,
+                outdir=path,
+                # level=2,
                 start_date=start_date,
                 rnday=end_date,
                 air=air,

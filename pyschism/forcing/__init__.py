@@ -11,6 +11,6 @@ __all__ = [
     "Tides",
     "GlobalForecastSystem", 'GFS',
     'NationalWaterModel', 'NWM',
-    'NWS',
+    'NWS','waves'
     # 'Bctides',
 ]

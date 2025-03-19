@@ -12,11 +12,12 @@ from pyschism import dates
 from pyschism.enums import Stratification
 from pyschism.hotstart import Hotstart
 
-# from pyschism.forcing import Tides, Hydrology
-from pyschism.forcing.source_sink import SourceSink
+# from pyschism.forcing import Tides, Hydrology, waves
+from pyschism.forcing.source_sink import SourceSink, NationalWaterModel
 from pyschism.forcing.nws.base import NWS
 from pyschism.forcing.nws.nws2 import NWS2
 from pyschism.forcing.nws.best_track import BestTrackForcing
+from pyschism.forcing.wwm.base import waves
 
 # from pyschism.forcing.baroclinic import BaroclinicForcing
 from pyschism.forcing.bctides import Bctides
@@ -35,11 +36,12 @@ def raise_type_error(argname, obj, cls):
 
 
 class ModelForcings:
-    def __init__(self, bctides=None, nws=None, source_sink=None, waves=None):
+    def __init__(self, bctides=None, nws=None, source_sink=None, waves=None, ocean=None):
         self.bctides = bctides
         self.nws = nws
         self.source_sink = source_sink
         self.waves = waves
+        self.ocean = ocean
 
     def write(
         self,
@@ -49,6 +51,7 @@ class ModelForcings:
     ):
 
         if self.bctides is not None:
+            print('\nWriting ModelForcings.bctides ...')
             self.bctides.write(
                 output_directory,
                 start_date=driver.param.opt.start_date,
@@ -57,15 +60,16 @@ class ModelForcings:
             )
 
         if self.nws is not None:
+            print('\nWriting ModelForcings.nws ...')
             if isinstance(self.nws, NWS2):
                 self.nws.write(
                     output_directory,
                     start_date=driver.param.opt.start_date,
-                    end_date=driver.param.core.rnday,
+                    end_date=driver.param.core.rnday, # this does not make sense!!
                     overwrite=overwrite,
                     bbox=driver.config.hgrid.get_bbox(output_type="bbox"),
-                    prc=True if driver.config.vgrid.is3D() is True else False,
-                    rad=True if driver.config.vgrid.is3D() is True else False,
+                    prc=True, #if driver.config.vgrid.is3D() is True else False,
+                    rad=True, #if driver.config.vgrid.is3D() is True else False,
                 )
             elif isinstance(self.nws, BestTrackForcing):
                 self.nws.write(
@@ -74,16 +78,45 @@ class ModelForcings:
                 )
 
         if self.source_sink is not None:
-            self.source_sink.write(
+            print('\nWriting ModelForcings.source_sink ...')
+            if isinstance(self.source_sink, NationalWaterModel):
+                self.source_sink.write(
+                    output_directory,
+                    driver.config.hgrid,
+                    start_date=driver.param.opt.start_date,
+                    rnday=driver.param.core.rnday,
+                    overwrite=overwrite,
+                )
+            elif isinstance(self.source_sink,SourceSink):
+                self.source_sink.start_date = driver.param.opt.start_date
+                self.source_sink.rnday = driver.param.core.rnda
+                self.source_sink.write(
+                    path= output_directory,
+                    overwrite=overwrite,
+                    msource = True,
+                    vsource = True,
+                    vsink = True,
+                    source_sink = True,
+                )
+
+        if self.ocean is not None:
+            print('\nWriting ModelForcings.ocean ...')
+            self.ocean.write(
                 output_directory,
-                driver.config.hgrid,
-                start_date=driver.param.opt.start_date,
-                end_date=driver.param.core.rnday,
-                overwrite=overwrite,
-            )
+                start_datetime=driver.param.opt.start_date,
+                rnday=driver.param.core.rnday,
+                bbox=driver.config.hgrid.bbox.bounds,
+                    )
 
         if self.waves is not None:
-            self.waves.write()
+            print('\nWriting ModelForcings.waves ...')
+            self.waves.write(
+                output_directory,
+                start_datetime=driver.param.opt.start_date,
+                rnday=driver.param.core.rnday,
+                bbox=driver.config.hgrid.bbox.bounds,
+                    )
+   
 
 class Gr3FieldTypes(Enum):
     ALBEDO = gridgr3.Albedo
@@ -519,6 +552,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         self.fgrid = fgrid
         self.flags = flags
         self.constituents = constituents
+        self.database = database
         self.add_earth_tidal = add_earth_tidal
         self.ethconst = ethconst
         self.vthconst = vthconst
@@ -759,6 +793,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
                 hgrid = self.hgrid,
                 flags = self.flags,
                 constituents = self.constituents,
+                database = self.database,
                 add_earth_tidal = self.add_earth_tidal,
                 ethconst = self.ethconst,
                 vthconst = self.vthconst,

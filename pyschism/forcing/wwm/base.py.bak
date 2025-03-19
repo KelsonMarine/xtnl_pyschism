@@ -1,0 +1,292 @@
+from pyschism.forcing.base import ModelForcing
+from abc import abstractmethod
+import os
+import pathlib
+from typing import Union
+from datetime import datetime, timedelta
+import xarray as xr
+
+
+# class Spectral_Wave_Dataset:
+# define me !
+
+class Parametric_Wave_Dataset(waves):
+
+    def __init__(
+            self, 
+            resource: Union[str, os.PathLike], 
+            hs_name: str ='hs', 
+            fp_name: str ='fp', 
+            t02_name: str ='t02',
+            dir_name: str ='dir', 
+            spr_name: str ='spr', 
+            dir_convention: str = 'Nautical', # 'nautical' or 'math' 
+                 ):
+        
+        self.resource = resource
+        self.filewave = 'wave_file'
+
+        # --- Define Dataset 
+        self.ds = xr.dataset()
+
+        # self.hs = AirComponent(self.fields, prmsl_name=prmsl_name,
+        #                         spfh_name=spfh_name, stmp_name=stmp_name,
+        #                         uwind_name=uwind_name, vwind_name=vwind_name)
+        # self.fp = PrcComponent(self.fields, prate_name=prate_name)
+        # self. = RadComponent(self.fields, dlwrf_name=dlwrf_name,
+        #                         dswrf_name=dswrf_name)
+
+        # --- Perform Direction Conversion
+
+        # TODO: add conversion here!
+
+    @property
+    def dtype(self):
+        """
+        Add to pyschism.enums!! 
+        """
+        return "Parametric_Wave_Dataset"
+        
+    def write(
+            self,
+            outdir: Union[str, os.PathLike],
+            start_datetime: datetime = None,
+            rnday: timedelta = None,
+            end_datetime: datetime = None,
+            bbox: Union[list, tuple] = None,
+        ):
+
+        outdir = pathlib.Path(outdir)
+        outdir.mkdir(exist_ok=True)
+            
+        if hasattr(self, 'hs') and hasattr(self, 'fp') and hasattr(self, 't02') and hasattr(self, 'dir') and hasattr(self, 'spr') :
+
+            # Write each variable to a separate NetCDF file and record the filenames in wwm_inputs.txt.
+            # Adjust the output directory if needed (here, files are written to the current directory).
+            if os.path.isfile(outdir / self.filewave):
+                os.remove(outdir / self.filewave)
+
+            with open(outdir / self.filewave, "w") as f:
+                for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
+                    filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
+                    f.write(filename + "\n") 
+                    print(filename)    
+                    print(self.ds[var])   
+                    print("")
+                    print(f'Writing: {filename}')
+
+                    # write to netcdf
+                    self.ds.to_netcdf(
+                        filename,
+                        encoding={var:{'_FillValue': -9999}}
+                        )
+
+
+    # @property
+    # def timevector(self):
+    #     for attr in ['air', 'prc', 'rad']:
+    #         if hasattr(self, attr):
+    #             return getattr(self, attr).timevector
+
+    # @property
+    # def resource(self):
+    #     return self._resource
+
+    # @resource.setter
+    # def resource(self, resource):
+    #     self._resource = resource
+    #     if hasattr(self, '_fields'):
+    #         del self._fields
+
+    # @property
+    # def fields(self):
+    #     if not hasattr(self, '_fields'):
+    #         fields = cf.read(self.resource, ignore_read_error=True)
+    #         # check lon
+    #         try:
+    #             lon = fields.select_by_ncvar('lon')[0]
+    #         except IndexError:
+    #             raise ValueError(f"Resource {self.resource} does not contain a "
+    #                              "'lon' variable.")
+    #         if len(lon.get_data_axes()) != 2:
+    #             raise ValueError("'lon' variable must be a 2-dimensional "
+    #                              "array")
+    #         fnames = lon.get_filenames()
+    #         lons = fields.select_by_ncvar('lon')
+    #         _logger.info(f'fields.select_by_var() returned {lons}')
+    #         for i in range(len(lons) - 1):
+    #             if not (lon.array == lons[i+1].array).all():
+    #                 raise ValueError(
+    #                     "Invalid sflux dataset. Found two different 'lon' "
+    #                     f"fields on files {fnames} and "
+    #                     f'{lons[i+1].get_filenames()}')
+    #         # check lat
+    #         try:
+    #             lat = fields.select_by_ncvar('lat')[0]
+    #         except IndexError:
+    #             raise ValueError(f"Resource {self.resource} does not contain a "
+    #                              "'lat' variable.")
+    #         if len(lat.get_data_axes()) != 2:
+    #             raise ValueError("'lat' variable must be a 2-dimensional "
+    #                              "array")
+    #         fnames = lat.get_filenames()
+    #         lats = fields.select_by_ncvar('lat')
+    #         for i in range(len(lats) - 1):
+    #             if not (lat.array == lats[i+1].array).all():
+    #                 raise ValueError(
+    #                     "Invalid sflux dataset. Found two different 'lat' "
+    #                     f"fields on files {fnames} and "
+    #                     f'{lats[i+1].get_filenames()}')
+    #         self._fields = fields
+    #     return self._fields
+
+
+class waves(ModelForcing):   
+    def __init__(
+        self,
+        wave_1: Union[Parametric_Wave_Dataset]  = None, #  TODO: add Spectral_Wave_Dataset
+    ):
+        """Loads WaveDataset to use as wave input."""
+
+        self.wave_1 = wave_1
+
+    # def __str__(self):
+    #     """Returns string used in wwmparam.nml"""
+    #     return f"{self.dtype.value}"
+
+    def __call__(self, model_driver):
+        self._start_date = model_driver.param.opt.start_date
+        self._rnday = model_driver.param.core.rnday
+        # model_driver.param.opt.msc2 = msc
+        # model_driver.param.opt.mdc2 = mdc
+
+    @abstractmethod
+    def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
+        """
+        Provides a method for writing SCHISM wave files to disk.
+
+        Since the output is different for each wave type, the derived class must implement this method.
+        """
+        pass  # Leave empty to enforce implementation in subclasses
+
+
+    @property
+    @abstractmethod
+    def dtype(self):
+        """Returns the dtype of this object."""
+        pass  # Must be implemented in a subclass
+
+
+#########################################################################################
+#
+# Utility Functions
+#
+#########################################################################################
+
+import xarray as xr
+import numpy as np
+from scipy.special import gamma
+from scipy.interpolate import PchipInterpolator
+import matplotlib.pyplot as plt 
+# # example call
+# waveTp_np = np.array([4.5, 7.0, 9.5, 15, 20])
+# n_np, spr_estimate = get_directional_spreading_coef_DNV(waveTp_np, showPlots=True)
+
+
+def get_wave_spr_DNV(waveTp, showPlots=False):
+    """
+    Get cos-n spreading coefficient and angles based on wave period, based on DNV RP C205  
+
+    Parameters
+    ----------
+    waveTp : numpy.ndarray or xarray.DataArray
+        Wave period values.
+    showPlots : bool, optional
+        If True, plot the interpolation function.
+    
+    Returns
+    -------
+    n : numpy.ndarray or xarray.DataArray
+        The directional spreading coefficient, with the same shape (and
+        coordinates/dimensions if waveTp is an xarray.DataArray).
+    spr_estimate : numpy.ndarray or xarray.DataArray
+        An estimate of the mean directional spread (in degrees), computed using 
+        spr_estimate_rad = sqrt(2/n).
+    """
+    # Check if waveTp is an xarray DataArray.
+    is_xarray = hasattr(waveTp, 'dims')
+    
+    # Get the underlying numpy values
+    if is_xarray:
+        waveTp_vals = waveTp.values
+    else:
+        waveTp_vals = np.asarray(waveTp)
+    
+    # Define anchor points for Tp and corresponding n values -- based on DNV
+    Tp_breaks = np.array([0, 6, 8, 16, 25])
+    n_breaks  = np.array([4, 4, 6, 8, 10])
+    
+    # Create a PCHIP interpolator.
+    pchip_interp = PchipInterpolator(Tp_breaks, n_breaks, extrapolate=True)
+    n_vals = pchip_interp(waveTp_vals)
+    
+    # # Initialize output with NaNs (preserving shape)
+    # n_vals = np.full(waveTp_vals.shape, np.nan)
+    
+    # # Condition 1: wind sea, Tp < 6 => n = 4
+    # mask = waveTp_vals < 6
+    # n_vals[mask] = 4
+    
+    # # Condition 2: wind sea, 6 <= Tp < 8 => n = 5
+    # mask = (waveTp_vals >= 6) & (waveTp_vals < 8)
+    # n_vals[mask] = 5
+    
+    # # Condition 3: swell, Tp > 8 => n = 6  (DNV says n>=6)
+    # mask = waveTp_vals > 8
+    # n_vals[mask] = 6
+
+    # # Condition 4: swell, Tp > 16 => n = 8
+    # mask = waveTp_vals > 16
+    # n_vals[mask] = 8
+
+    # If waveTp was an xarray, wrap the output to preserve coordinates and dims.
+    if is_xarray:
+        n = xr.DataArray(n_vals, dims=waveTp.dims, coords=waveTp.coords, name='directional_spreading_coef')
+    else:
+        n = n_vals
+
+    # Estimate directional spreading (in radians) using spr_estimate_rad = sqrt(2/n)
+    spr_estimate_rad = np.sqrt(2 / n)
+    spr_estimate = np.round(spr_estimate_rad * (180 / np.pi))  # convert to degrees
+    
+    if showPlots:
+        def K(n):
+            return gamma(n/2 + 1) / (np.sqrt(np.pi) * gamma(n/2 + 0.5))
+        
+        def cosN(n, theta):
+            return np.cos(theta)**n
+        
+        def D(n, theta):
+            return K(n) * cosN(n, theta)
+        
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.set_title(f'D(θ) = K(n)·cosⁿ(θ)\ntp={waveTp}\nn={n}\nspr={spr_estimate}')
+        ax.set_xlabel('θ [rad]')
+        ax.set_ylabel('D(θ)')
+        
+        theta = np.arange(-np.pi/2, np.pi/2, 0.01)
+        unique_ns = np.unique(n_vals[~np.isnan(n_vals)]).astype(int)
+        cmap = plt.get_cmap('winter', max(unique_ns)+1)
+
+        # Loop over unique exponents. The MATLAB code plots only if n is even.
+        for n_val in unique_ns:
+            if n_val % 2 == 0:
+                color = cmap(n_val)
+                label = f'n={n_val}'
+                ax.plot(theta, D(n_val, theta), '-', color=color, label=label)    
+
+        ax.legend()
+        ax.grid(True)
+        plt.show()
+    
+    return n, spr_estimate

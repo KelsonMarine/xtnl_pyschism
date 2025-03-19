@@ -6,18 +6,22 @@ import os
 import pathlib
 from typing import Union
 
-
+import matplotlib.pyplot as plt
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
+from shapely.geometry import Point, LineString, MultiPoint
+from collections import defaultdict
 from pyproj import CRS, Transformer
 import pytz
 from scipy.interpolate import interp1d
 from shapely import ops
 from shapely.geometry import Point
 
-
 from pyschism import dates
+from pyschism.mesh.base import Gr3
+from pyschism.mesh.hgrid import Hgrid
 
 
 logger = logging.getLogger(__name__)
@@ -40,8 +44,10 @@ class SourceSinkDataset:
             for elements in self.data.values():
                 for element_id in elements.keys():
                     unique_elements.add(element_id)
+            # self._elements = list(
+            #     map(str, sorted(list(map(int, unique_elements)))))
             self._elements = list(
-                map(str, sorted(list(map(int, unique_elements)))))
+                map(int, sorted(list(map(int, unique_elements)))))
         return self._elements
 
     @property
@@ -138,6 +144,13 @@ class TimeHistoryFile(ABC):
 
     def get_element_timeseries(self, element_id):
         values = []
+
+        if isinstance(element_id, str):
+            try:
+                element_id = int(element_id)  # Convert to integer
+            except ValueError:
+                raise ValueError(f"Cannot convert '{element_id}' to an integer.")
+            
         for time in self.dataset.timevector:
             values.append(self.dataset.data[time].get(
                 element_id, {}).get('flow', np.nan))
@@ -167,17 +180,12 @@ class Msource(TimeHistoryFile):
             if relative_time < 0:
                 continue
             line = [f"{relative_time:G}"]
-            for element_id in self.dataset.elements:
-                temperature = (
-                    self.dataset.data[time].get(
-                        element_id, {}).get("temperature", -9999.0)
-                )
+            # index dictionary at each time for each element index
+            for element_id in self.dataset.elements:    
+                temperature = (self.dataset.data[time].get(element_id, {}).get("temperature", -9999.0))
                 line.append(f"{temperature: .4e}")
             for element_id in self.dataset.elements:
-                salinity = (
-                    self.dataset.data[time].get(
-                        element_id, {}).get("salinity", -9999.0)
-                )
+                salinity = (self.dataset.data[time].get(element_id, {}).get("salinity", -9999.0))
                 line.append(f"{salinity: .4e}")
             data.append(" ".join(line))
         return "\n".join(data)
@@ -191,6 +199,13 @@ class Msource(TimeHistoryFile):
             salt.append(self.dataset.data[time].get(
                 element_id, {}).get('salinity', -9999.0))
         return np.array(temp), np.array(salt)
+    
+    # def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
+    #     path = pathlib.Path(path)
+    #     if (path / self.filename).exists() and overwrite is not True:
+    #         raise IOError("File exists and overwrite is not True.")
+    #     with open(path / self.filename, "w") as f:
+    #         f.write(str(self))
 
 
 class Vsink(TimeHistoryFile):
@@ -230,6 +245,28 @@ class SourceSinkWriter:
 
 
 class SourceSink:
+    def __init__(self, sources: Sources = None, sinks: Sinks = None, data: dict = None):
+        """
+        Initialize SourceSink object with Sources and Sinks objects. 
+        
+        __init__ method created by Kelson Marine
+        """
+        if sources is not None:
+            self.sources = sources  
+        # else:
+        #     self.sources = Sources()
+
+        if sinks is not None:
+            self.sinks = sinks  
+        # else:
+        #     self.sinks()
+
+        if sinks is not None:
+            self._data = data  
+        # else:
+        #     self._data = {}
+
+
     def __add__(self, other):
         source_sink = SourceSink()
         source_sink.sources = Sources(
@@ -248,6 +285,10 @@ class SourceSink:
         temperature: float = np.nan,
         salinity: float = np.nan,
     ):
+        
+        '''
+        Note: this function fails whent the _data property is not defined
+        '''
 
         time = dates.localize_datetime(time).astimezone(pytz.utc)
         data_for_element = self._data.get(time, {}).get("element_id", {})
@@ -420,7 +461,10 @@ class SourceSink:
             fname = msource
         if msource is not False:
             Msource(sources, self.start_date, self.rnday,
-                    fname).write(path, overwrite)
+                    fname).write(
+                        path, 
+                        overwrite,
+                        )
 
         if vsink is True:
             fname = "vsink.th"
@@ -461,6 +505,11 @@ class SourceSink:
             self._sources = Sources(sources)
         return self._sources
 
+    @sources.setter
+    def sources(self, sources: Sources = None):
+        if sources is not None:
+            self._sources = sources
+
     @property
     def sinks(self):
         if not hasattr(self, "_sinks"):
@@ -484,6 +533,11 @@ class SourceSink:
                         }
             self._sinks = Sinks(sinks)
         return self._sinks
+    
+    @sinks.setter
+    def sinks(self, sinks: Sinks = None):
+        if sinks is not None:
+            self._sinks = sinks
 
     @property
     def start_date(self):
@@ -522,6 +576,11 @@ class SourceSink:
     @property
     def data(self):
         return self._data
+    
+    @data.setter
+    def data(self, data: dict = None):
+        if data is not None:
+            self._data = data
 
     @property
     def df(self):
@@ -533,7 +592,11 @@ class SourceSink:
                         {"time": time, "element_id": element_id, **data})
             self._df = pd.DataFrame(_data)
         return self._df
-
+    
+    @data.setter
+    def df(self, df: pd.DataFrame = None):
+        if df is not None:
+            self._df = df        
 
 @lru_cache(maxsize=None)
 def get_circle_of_radius(lon, lat, radius):
@@ -546,3 +609,63 @@ def get_circle_of_radius(lon, lat, radius):
     center = Point(float(lon), float(lat))
     point_transformed = ops.transform(wgs84_to_aeqd, center)
     return ops.transform(aeqd_to_wgs84, point_transformed.buffer(radius))
+
+
+class HGridElementPairings:
+    def __init__(self, hgrid: Union[Hgrid, Gr3], lon: Union[list,np.array], lat: Union[list, np.array], workers: int = -1):
+        """
+        Maps (lon, lat) coordinates to the nearest hgrid element ID.
+        
+        Parameters:
+        hgrid : Gr3, the hgrid object representing the model grid.
+        lon : array-like, Longitudes of the points to be mapped.
+        lat : array-like, Latitudes of the points to be mapped.
+        workers : int, optional, Number of workers for cKDTree query (default is -1, meaning auto).
+        """
+        self._hgrid = hgrid
+        self.lon = np.asarray(lon)
+        self.lat = np.asarray(lat)
+        
+        # Generate element centroids KDTree
+        centroids = []
+        element_ids = []
+        for element_id, element in hgrid.elements.elements.items():
+            centroid = LineString(
+                hgrid.nodes.coord[list(map(hgrid.nodes.get_index_by_id, element))]
+            ).centroid
+            centroids.append((centroid.x, centroid.y))
+            element_ids.append(element_id)
+        
+        self.tree = cKDTree(centroids)
+        self.element_ids = np.array(element_ids)
+        
+        # Find nearest elements for given lon/lat points
+        # map each (lon, lat) point to the nearest element using KDTree."""
+        coords = np.vstack((self.lon, self.lat)).T
+        _, idxs = self.tree.query(coords, workers=workers)
+        self.idxs = idxs
+        self.mapped_elements = self.element_ids[idxs]
+    
+    def get_mapped_elements(self):
+        """Returns a dictionary mapping (lon, lat) tuples to element IDs."""
+        return {(lon, lat): elem_id for (lon, lat), elem_id in zip(zip(self.lon, self.lat), self.mapped_elements)}
+    
+    def save_json(self, filename):
+        """Saves the mappings to a JSON file."""
+        import json
+        with open(filename, "w") as f:
+            json.dump(self.get_mapped_elements(), f)
+    
+    def make_plot(self,ax = None,figsize=(10,10)):
+        """Plots the mapped points and hgrid elements for verification."""
+        gdf = self.hgrid.elements.gdf
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        self.hgrid.triplot(axes=ax,label="hgrid")
+        ax.scatter(self.lon, self.lat, marker="x", color="red", label="Mapped Points")
+        plt.legend()
+        plt.show()
+
+    @property
+    def hgrid(self):
+        return self._hgrid

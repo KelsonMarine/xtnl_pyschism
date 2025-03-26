@@ -28,8 +28,12 @@ class Param:
         ihfskip: Union[int, timedelta] = None,
         template=None,
     ):
+        if template is not None:
+            self.template = f90nml.read(template).todict()
+        else:
+            self.template = template
 
-        self.core = CORE()
+        self.core = CORE(template=template)
         self.core.ibc = ibc
         self.core.rnday = rnday
         self.core.dt = dt
@@ -37,7 +41,7 @@ class Param:
         self.core.ihfskip = ihfskip
         self.opt = OPT()
         self.schout = SCHOUT()
-        self.template = template
+
 
     def __str__(self):
         return f"{str(self.core)}\n\n{str(self.opt)}\n\n{str(self.schout)}\n"
@@ -47,12 +51,22 @@ class Param:
         if path.is_file() and not overwrite:
             raise IOError(f"File {path} exists and overwrite=False")
         if use_template:
-            PARAM_TEMPLATE = pathlib.Path(__file__).parent / 'param.nml' if use_template is True else use_template
-            schism_param_sample = schism_init.read_schism_param_sample_patched(PARAM_TEMPLATE)
-            tmpfile = tempfile.NamedTemporaryFile()
-            with open(tmpfile.name, 'w') as fh:
-                fh.write(schism_param_sample)
-            f90nml.patch(tmpfile.name, self.to_dict(), path)
+            core_dict = self.core.to_dict()
+            opt_dict = self.opt.to_dict() # this method uses pathlib.Path(__file__).parent / 'param.nml') by default
+            schout_dict = self.schout.to_dict()
+
+            # Use template and patch with updated properties of Param object 
+            # If use_template is true and self.template is None, the default param.nml will be used
+            # If self.template is not None, the existing self.template dictionary will be used
+            if use_template and self.template is None:
+                self.template = f90nml.read(pathlib.Path(__file__).parent / 'param.nml').todict()
+                patch_nml = f90nml.namelist.Namelist({core_dict,opt_dict,schout_dict})
+                tmp_nml = f90nml.namelist.Namelist(self.template)
+                tmp_nml.patch(patch_nml)
+            elif use_template and self.template is not None:
+                tmp_nml = f90nml.namelist.Namelist(self.template)
+                tmp_nml.patch({'core':core_dict,'schout':schout_dict}) # omit default params from opt_dict, use those in tmp_nml instead
+            tmp_nml.write(nml_path=path,force=True if overwrite else False, sort=False)
         else:
             with open(path, "w") as f:
                 f.write(str(self))

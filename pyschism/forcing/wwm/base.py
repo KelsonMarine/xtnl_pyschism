@@ -5,13 +5,15 @@ import pathlib
 from typing import Union
 from datetime import datetime, timedelta
 import xarray as xr
+import scipy.optimize
+import warnings
 
 
 # ModelForcing is the base class.
 # waves is an abstract subclass of ModelForcing.
 # Parametric_Wave_Dataset is a concrete subclass of waves.
 
-class waves(ModelForcing):   
+class WWM(ModelForcing):   
     """
     Abstract base class for wave datasets.
 
@@ -28,7 +30,7 @@ class waves(ModelForcing):
     For example, a shared write() implementation that subclasses can override
 
     """
-    def __init__(self, wave_1: Union["waves", None] = None):  # Forward reference
+    def __init__(self, wave_1 = None):  
         """Loads WaveDataset to use as wave input."""
         self.wave_1 = wave_1
 
@@ -47,9 +49,9 @@ class waves(ModelForcing):
         pass
 
 
-class Parametric_Wave_Dataset(waves):
+class Parametric_Wave_Dataset(WWM):
     """
-    Subclass implementing waves.
+    Subclass implementing waves from parmeteric spectral statistics
     """
     def __init__(
         self, 
@@ -86,6 +88,44 @@ class Parametric_Wave_Dataset(waves):
         self.ds.to_netcdf(path / f"{self.filewave}.nc", mode="w")
 
 
+class Directional_Spectra_Wave_Dataset(WWM):
+    """
+    Subclass implementing waves from directional spectra boundary conditions
+    """
+    def __init__(
+        self, 
+        ds: Union[xr.Dataset,None],
+        resource: Union[str, os.PathLike, None]=None, 
+        # hs_name: str ='hs', 
+        # fp_name: str ='fp', 
+        # t02_name: str ='t02',
+        # dir_name: str ='dir', 
+        # spr_name: str ='spr', 
+        # dir_convention: str = 'Nautical',
+    ):
+        super().__init__()  # Initialize the waves base class
+        self.resource = resource
+        self.filewave = 'wave_file'
+        if ds is None:
+            self.ds = xr.open_dataset(resource)
+        else:
+            self.ds
+
+    @property
+    def dtype(self):
+        return "Directional_Spectra_Wave_Dataset"
+
+    def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
+        """
+        Implements the required write method.
+        """
+        path = pathlib.Path(path)
+        path.mkdir(exist_ok=True)
+        print(f"Writing Directional_Spectra_Wave_Dataset to {path}, overwrite={overwrite}")
+
+        # Example: Writing a NetCDF file
+        self.ds.to_netcdf(path / f"{self.filewave}.nc", mode="w")
+
 
 #########################################################################################
 #
@@ -99,17 +139,17 @@ from scipy.special import gamma
 from scipy.interpolate import PchipInterpolator
 import matplotlib.pyplot as plt 
 # # example call
-# waveTp_np = np.array([4.5, 7.0, 9.5, 15, 20])
-# n_np, spr_estimate = get_directional_spreading_coef_DNV(waveTp_np, showPlots=True)
+# Tp_np = np.array([4.5, 7.0, 9.5, 15, 20])
+# n_np, spr_estimate = get_directional_spreading_coef_DNV(Tp_np, showPlots=True)
 
 
-def get_wave_spr_DNV(waveTp, showPlots=False):
+def get_wave_spr_DNV(Tp: Union[list,np.array,xr.DataArray], showPlots=False):
     """
     Get cos-n spreading coefficient and angles based on wave period, based on DNV RP C205  
 
     Parameters
     ----------
-    waveTp : numpy.ndarray or xarray.DataArray
+    Tp : numpy.ndarray or xarray.DataArray
         Wave period values.
     showPlots : bool, optional
         If True, plot the interpolation function.
@@ -118,19 +158,21 @@ def get_wave_spr_DNV(waveTp, showPlots=False):
     -------
     n : numpy.ndarray or xarray.DataArray
         The directional spreading coefficient, with the same shape (and
-        coordinates/dimensions if waveTp is an xarray.DataArray).
+        coordinates/dimensions if Tp is an xarray.DataArray).
     spr_estimate : numpy.ndarray or xarray.DataArray
         An estimate of the mean directional spread (in degrees), computed using 
         spr_estimate_rad = sqrt(2/n).
+
+    From: DNV-RP-C205, October 2010, Section 3.5.5.4
     """
-    # Check if waveTp is an xarray DataArray.
-    is_xarray = hasattr(waveTp, 'dims')
+    # Check if Tp is an xarray DataArray.
+    is_xarray = hasattr(Tp, 'dims')
     
     # Get the underlying numpy values
     if is_xarray:
-        waveTp_vals = waveTp.values
+        Tp_vals = Tp.values
     else:
-        waveTp_vals = np.asarray(waveTp)
+        Tp_vals = np.asarray(Tp)
     
     # Define anchor points for Tp and corresponding n values -- based on DNV
     Tp_breaks = np.array([0, 6, 8, 16, 25])
@@ -138,30 +180,30 @@ def get_wave_spr_DNV(waveTp, showPlots=False):
     
     # Create a PCHIP interpolator.
     pchip_interp = PchipInterpolator(Tp_breaks, n_breaks, extrapolate=True)
-    n_vals = pchip_interp(waveTp_vals)
+    n_vals = pchip_interp(Tp_vals)
     
     # # Initialize output with NaNs (preserving shape)
-    # n_vals = np.full(waveTp_vals.shape, np.nan)
+    # n_vals = np.full(Tp_vals.shape, np.nan)
     
     # # Condition 1: wind sea, Tp < 6 => n = 4
-    # mask = waveTp_vals < 6
+    # mask = Tp_vals < 6
     # n_vals[mask] = 4
     
     # # Condition 2: wind sea, 6 <= Tp < 8 => n = 5
-    # mask = (waveTp_vals >= 6) & (waveTp_vals < 8)
+    # mask = (Tp_vals >= 6) & (Tp_vals < 8)
     # n_vals[mask] = 5
     
     # # Condition 3: swell, Tp > 8 => n = 6  (DNV says n>=6)
-    # mask = waveTp_vals > 8
+    # mask = Tp_vals > 8
     # n_vals[mask] = 6
 
     # # Condition 4: swell, Tp > 16 => n = 8
-    # mask = waveTp_vals > 16
+    # mask = Tp_vals > 16
     # n_vals[mask] = 8
 
-    # If waveTp was an xarray, wrap the output to preserve coordinates and dims.
+    # If Tp was an xarray, wrap the output to preserve coordinates and dims.
     if is_xarray:
-        n = xr.DataArray(n_vals, dims=waveTp.dims, coords=waveTp.coords, name='directional_spreading_coef')
+        n = xr.DataArray(n_vals, dims=Tp.dims, coords=Tp.coords, name='directional_spreading_coef')
     else:
         n = n_vals
 
@@ -180,7 +222,7 @@ def get_wave_spr_DNV(waveTp, showPlots=False):
             return K(n) * cosN(n, theta)
         
         fig, ax = plt.subplots(figsize=(12, 5))
-        ax.set_title(f'D(θ) = K(n)·cosⁿ(θ)\ntp={waveTp}\nn={n}\nspr={spr_estimate}')
+        ax.set_title(f'D(θ) = K(n)·cosⁿ(θ)\ntp={Tp}\nn={n}\nspr={spr_estimate}')
         ax.set_xlabel('θ [rad]')
         ax.set_ylabel('D(θ)')
         
@@ -200,3 +242,64 @@ def get_wave_spr_DNV(waveTp, showPlots=False):
         plt.show()
     
     return n, spr_estimate
+
+
+def gamma_from_Tp_DNV(Tp, Hs):
+    x = Tp / np.sqrt(Hs)
+    if x <= 3.6:
+        return 5.0
+    elif x < 5:
+        return np.exp(5.75 - 1.15 * x)
+    else:
+        return 1.0
+
+def Tm01_over_Tp_DNV(gamma):
+    return 0.7303 + 0.049367 * gamma - 0.006556 * gamma**2 + 0.0003610 * gamma**3
+
+def solve_Tp_gamma_from_Tm01_Hs_DNV(Tm01, Hs):
+
+    def objective(Tp):
+        gamma = gamma_from_Tp_DNV(Tp, Hs)
+        phi = Tm01 - Tp * Tm01_over_Tp_DNV(gamma)
+        return phi
+
+    result = scipy.optimize.root_scalar(objective, bracket=[0.5, 30], method='brentq')
+    if result.converged:
+        Tp = result.root
+        gamma = gamma_from_Tp_DNV(Tp, Hs)
+        return Tp, gamma
+    else:
+        warnings.warn('pyschism.forcing.wwm.base.solve_Tp_gamma_from_Tm01_Hs_DNV failed -- using gamm=3.3 and .get_wave_Tp_from_Ta_DNV')
+        gamma = 3.3
+        Tp = get_wave_Tp_from_Ta_DNV(Tm01=Tm01,gamma=gamma)
+        return Tp, gamma
+
+
+def get_wave_Tp_from_Ta_DNV(Tm01: Union[float, np.ndarray], gamma: Union[float, np.ndarray] = 3.3) -> np.ndarray:
+    """
+    Estimate wave peak period (Tp) from wave mean period (Ta) and gamma,
+    using DNV-GL empirical relationship for JONSWAP spectrum.
+
+    Parameters:
+        Tm01 : float or np.ndarray
+            Mean wave period (Ta)
+        gamma : float or np.ndarray, optional
+            JONSWAP peak enhancement factor (default is 3.3)
+
+    Returns:
+        Tp : np.ndarray
+            Estimated peak wave period (Tp)
+
+    From: DNV-RP-C205, October 2010, Section 3.5.5.4
+    """
+    Tm01 = np.asarray(Tm01, dtype=float)
+    gamma = np.asarray(gamma, dtype=float)
+
+    if gamma.size != 1 and Tm01.shape != gamma.shape:
+        raise ValueError("Tm01 and gamma must have the same shape or gamma must be a scalar.")
+
+    denom = Tm01_over_Tp_DNV(gamma)
+    Tp = Tm01 / denom
+
+    return Tp
+

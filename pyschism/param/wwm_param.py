@@ -5,6 +5,7 @@ from datetime import timedelta, datetime
 import json
 import xarray as xr
 import numpy as np
+import pathlib
 
 class WWM_Param:
     """
@@ -13,13 +14,13 @@ class WWM_Param:
 
     def __init__(
         self,
-        template: Union[f90nml.namelist.Namelist, str, os.PathLike],
+        template: Union[f90nml.namelist.Namelist, str, os.PathLike] = pathlib.Path(__file__).resolve().parent / 'wwminput_ww3.nml',
         start_datetime: Union[int, float, datetime] = None,
         end_datetime: Union[int, float, datetime] = None,
-        dt: Union[int, float, timedelta, dict] = None,
+        dt: Union[int, float, timedelta] = None,
         rnday: Union[int, float, timedelta] = None,
         filewave: Union[str, os.PathLike] = None,
-        proc: Union[f90nml.namelist.Namelist, dict] = None,
+        proc: Union[f90nml.namelist.Namelist, dict, ] = None,
         coupl: Union[f90nml.namelist.Namelist, dict] = None,
         grid: Union[f90nml.namelist.Namelist, dict] = None,
         init: Union[f90nml.namelist.Namelist, dict] = None,
@@ -86,7 +87,6 @@ class WWM_Param:
         self.nml.patch({'wind':{}})
         self.nml.patch({'curr':{}})
         self.nml.patch({'walv':{}})
-
 
         # TO DO: 
         #  - consider create an attribute or class for each section (like pyschism.param? 

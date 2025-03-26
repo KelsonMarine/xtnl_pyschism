@@ -6,6 +6,7 @@ from typing import Union
 
 import f90nml
 
+import f90nml.namelist
 from pyschism.enums import Stratification
 
 
@@ -33,7 +34,7 @@ class CORE:
         dt: Union[float, timedelta] = 150.0,
         nspool: Union[int, float, timedelta] = None,
         ihfskip: Union[int, timedelta] = None,
-        template: Union[str, os.PathLike, bool] = None,
+        template: Union[bool, str, os.PathLike, dict, f90nml.namelist.Namelist] = None,
     ):
         self.ipre = ipre
         self.ibc = ibc
@@ -199,13 +200,17 @@ class CORE:
         return self._template
 
     @template.setter
-    def template(self, template: Union[str, os.PathLike, None]):
+    def template(self, template: Union[bool, str, os.PathLike, dict, f90nml.Namelist ,None]):
         if template is True:
-            template = pathlib.Path(__file__) / 'param.nml'
+            template = f90nml.read(pathlib.Path(__file__) / 'param.nml')
         elif template is False or template is None:
             template = None
-        else:
-            template = pathlib.Path(template)
+        elif isinstance(template,str) or isinstance(template,os.PathLike):
+            template =  f90nml.read(template)['core']
+        elif isinstance(template,f90nml.Namelist):
+            template = template['core']
+        elif isinstance(template, dict): 
+            template = template
         self._template = template
 
     @property

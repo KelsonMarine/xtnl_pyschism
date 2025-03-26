@@ -211,7 +211,7 @@ def ConvertTemp(salt, temp, dep):
 
 class OpenBoundaryInventory:
 
-    def __init__(self, hgrid, vgrid=None):
+    def __init__(self, hgrid, vgrid=None, ocean_bnd_ids: list = [0]):
         self.hgrid = hgrid
         if vgrid is None:
             print('OpenBoundaryInventory using default Vgrid')
@@ -219,12 +219,25 @@ class OpenBoundaryInventory:
         elif isinstance(vgrid, os.PathLike) or  isinstance(vgrid, str):
             vgrid = Vgrid.open(vgrid)
         self.vgrid = vgrid
+        self.ocean_bnd_ids = ocean_bnd_ids
 
-    def fetch_data(self, outdir: Union[str, os.PathLike], start_date, rnday, ocean_bnd_ids = [0], elev2D=True, TS=True, UV=True, restart=False, adjust2D=False, lats=None, msl_shifts=None): 
+    def fetch_data(self, 
+                   outdir: Union[str, os.PathLike], 
+                   start_date, 
+                   rnday, 
+                   elev2D=True, 
+                   TS=True, 
+                   UV=True, 
+                   restart=False, 
+                   adjust2D=False, 
+                   lats=None, 
+                   msl_shifts=None,
+                   ocean_bnd_ids = None, # can reset from initalized value
+                   ): 
         outdir = pathlib.Path(outdir)
 
         self.start_date = start_date
-        if isinstance(rnday,int):
+        if not isinstance(rnday,timedelta):
             rnday = timedelta(days=rnday)
         self.rnday=rnday
         self.timevector=np.arange(
@@ -237,6 +250,10 @@ class OpenBoundaryInventory:
         opbd=[]
         #for boundary in gdf.itertuples():
         #    opbd.extend(list(boundary.indexes))
+
+        if ocean_bnd_ids is None:
+            ocean_bnd_ids = self.ocean_bnd_ids
+        
         for ibnd in ocean_bnd_ids:
             opbd.extend(list(gdf.iloc[ibnd].indexes))
         blon = self.hgrid.coords[opbd,0]

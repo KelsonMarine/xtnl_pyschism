@@ -12,19 +12,21 @@ from pyschism import dates
 from pyschism.enums import Stratification
 from pyschism.hotstart import Hotstart
 
-# from pyschism.forcing import Tides, Hydrology, waves
+# from pyschism.forcing import Tides, Hydrology, waves, hycom (ocean)
 from pyschism.forcing.source_sink import SourceSink, NationalWaterModel
 from pyschism.forcing.nws.base import NWS
 from pyschism.forcing.nws.nws2 import NWS2
 from pyschism.forcing.nws.best_track import BestTrackForcing
-from pyschism.forcing.wwm.base import waves
+from pyschism.forcing.wwm.base import WWM, Parametric_Wave_Dataset, Directional_Spectra_Wave_Dataset
+from pyschism.forcing.hycom.hycom2schism import OpenBoundaryInventory as HycomOpenBoundaryInventory
+from pyschism.forcing.hycom.gofs import HycomComponent
 
 # from pyschism.forcing.baroclinic import BaroclinicForcing
 from pyschism.forcing.bctides import Bctides
 from pyschism.makefile import MakefileDriver
 from pyschism.mesh import Hgrid, Vgrid, Fgrid, gridgr3, prop
 from pyschism.mesh.fgrid import ManningsN, DragCoefficient
-from pyschism.param import Param
+from pyschism.param import Param, WWM_Param
 from pyschism.server.base import ServerConfig
 from pyschism.stations import Stations
 
@@ -33,7 +35,6 @@ def raise_type_error(argname, obj, cls):
     raise TypeError(
         f"Argument {argname} must be of type {cls}, not " f"type {type(obj)}."
     )
-
 
 class ModelForcings:
     def __init__(self, bctides=None, nws=None, source_sink=None, waves=None, ocean=None):
@@ -89,7 +90,7 @@ class ModelForcings:
                 )
             elif isinstance(self.source_sink,SourceSink):
                 self.source_sink.start_date = driver.param.opt.start_date
-                self.source_sink.rnday = driver.param.core.rnda
+                self.source_sink.rnday = driver.param.core.rnday
                 self.source_sink.write(
                     path= output_directory,
                     overwrite=overwrite,
@@ -101,12 +102,18 @@ class ModelForcings:
 
         if self.ocean is not None:
             print('\nWriting ModelForcings.ocean ...')
-            self.ocean.write(
-                output_directory,
-                start_datetime=driver.param.opt.start_date,
-                rnday=driver.param.core.rnday,
-                bbox=driver.config.hgrid.bbox.bounds,
+            if isinstance(self.ocean, HycomOpenBoundaryInventory):
+                self.ocean.fetch_data(
+                    outdir=output_directory,
+                    start_date=driver.param.opt.start_date,
+                    rnday=timedelta(days=driver.param.core.rnday),
+                    elev2D=True, 
+                    TS=True, 
+                    UV=True,
                     )
+            elif isinstance(self.ocean,HycomComponent):
+                print('\nWriting ModelForcings.ocean.HycomComponent not implemented yet! ... skipping ...\n')
+
 
         if self.waves is not None:
             print('\nWriting ModelForcings.waves ...')
@@ -151,34 +158,68 @@ class ModelDriver:
         elev_ic=None,
         temp_ic=None,
         salt_ic=None,
-        nspool: Union[int, timedelta] = None,
+        nspool: Union[int, timedelta] = None, 
         ihfskip: int = None,
         nhot_write: Union[int, timedelta] = None,
         stations: Stations = None,
         hotstart: Union[Hotstart, "ModelDriver"] = None,
         server_config: ServerConfig = None,
+        param: Param = None,
+        wwm_param: WWM_Param = None,
         param_template=None,
+        wwm_param_template=pathlib.Path(__file__).resolve().parent / 'param' / 'wwminput_ww3.nml',
         **surface_outputs,
     ):
         self.config = config
-        self.param = Param()
+
+        if isinstance(rnday,timedelta):
+                rnday = rnday / timedelta(days=1)    
+        if isinstance(dt,timedelta):
+                dt = dt.total_seconds
+        if (ihfskip is None) and (nspool is None):
+            # These two flags control the global netcdf outputs. 
+            # Output is done every nspool steps, and a new output stack is opened every ihfskip steps. 
+            # The code requires that ihfskip is a multiple of nspool, and nhot_write (see SCHOUT section) is a a multiple of ihfskip.
+            nspool = timedelta(minutes=60) / timedelta(seconds=dt) # output data every 60 min
+            ihfskip = timedelta(days=1) / timedelta(seconds=dt)
+
+        # TODO: init template
+        self.param_template = param_template
+        self.wwm_param_template = wwm_param_template
+
+        # Define SCHISM param.nml
+        if param is None:
+            
+            params_kwargs = {
+                'dt': dt,
+                'rnday': rnday,
+                'nspool': nspool,
+                'ihfskip': ihfskip,
+            }
+            if param_template is not None:
+                params_kwargs['template'] = param_template
+            self.param = Param(**params_kwargs)  
+        else: 
+            self.param = param
 
         # set core parameters
-        self.param.core.dt = dt
-        self.param.core.rnday = rnday
-        self.param.core.nspool = nspool if nspool is not None else self.param.core.rnday
-        self.param.core.ihfskip = (
-            ihfskip if ihfskip is not None else timedelta(days=self.param.core.rnday)
-        )
+        # self.param.core.dt = dt
+        # self.param.core.rnday = rnday
+        # self.param.core.nspool = nspool if nspool is not None else self.param.core.rnday
+        # self.param.core.ihfskip = (
+        #     ihfskip if ihfskip is not None else timedelta(days=self.param.core.rnday)
+        # )
         # if self.config.vgrid.is2D():
         #     self.param.core.ibc = Stratification.BAROTROPIC
         #     if self.config.forcings.baroclinic is not None:
         #         self.param.core.ibtp = 1
         # else:
         #     self.param.core.ibc = Stratification.BAROCLINIC
+       
+        # If ibc=0, a baroclinic model is used and regardless of the value for ibtp, the transport equation is solved. 
+        # If ibc=1, a barotropic model is used, and the transport equation may (when ibtp=1) or may not (when ibtp=0) be solved; 
+        # When ibtp=1, S and T are treated as passive tracers.
         self.param.core.ibc = self.config.stratification
-
-        # TODO: must also set msc2/mdc2 here.
 
         # set opt
         self.param.opt.start_date = start_date
@@ -214,13 +255,13 @@ class ModelDriver:
 
         self.elev_ic = elev_ic
 
-        # set flag_ic
+        # set flag_ic         
+        # # TODO: init tracers (flag_ic[2:])
+
         # flag_ic(1) = 1 !T
         self.temp_ic = temp_ic
         # flag_ic(2) = 1 !S
         self.salt_ic = salt_ic
-
-        # TODO: init tracers (flag_ic[2:])
 
         if self.config.forcings.nws is not None:
             if isinstance(self.config.forcings.nws, NWS2):
@@ -243,9 +284,7 @@ class ModelDriver:
             if self.elev_ic is None:
                 if self.hotstart is None:
                     self.elev_ic = True
-
-        # TODO: init template
-        self.param_template = param_template
+            self.param.opt.if_source = 1 # ASCII source / sink terms in source_sink.in, vsource.th, msource.th, vsink.th, msink.th
 
         for var in self.param.schout.surface_output_vars:
             val = surface_outputs.pop(var) if var in surface_outputs else None
@@ -257,6 +296,71 @@ class ModelDriver:
                 "ModelDriver() got an unexpected keyword arguments"
                 f" {list(surface_outputs)}."
             )
+
+        # Define WWM wwmparam.nml 
+        if self.config.waves is not None:
+            if wwm_param is None:
+
+                # set some defaults ; patch with WWM_Param
+                wwm_proc = {'proc': {
+                    'lsphe':True if self.param.opt.ics == 2 else False,    # sphericial coords ... True if self.param.opt.ics == 2 else False
+                    'lnautin':True } # nautical convention ... True
+                            }
+                wwm_grid = {'grid':{
+                    'mdc': 36,  # number of wave dir bins
+                    'msc' : 24, # number of wave freq bins
+                    'igridtype' : 3,
+                }}
+                wwm_init = {'init':{
+                    'lhotr': False if hotstart is None else True,
+                    'linid': True, 
+                    'initstyle':2, # read from netcdf when iboundformat=3
+                }}
+                
+                wwm_bouc = {'bouc':{
+                    'lbcse': True,
+                    'lbinter' : True,
+                    'lbcwa' : False,
+                    'lbcsp' : False if isinstance(self.config.waves,Parametric_Wave_Dataset) else True,
+                    'linhom' : True,
+                    'lbsp1d' : False,
+                    'lbsp2d' : False,
+                    'iboundformat':3 if isinstance(self.config.waves,Parametric_Wave_Dataset) else 6, 
+                    'fileboudn' : 'wwmbnd.gr3',
+                    'fileave' : 'bndfiles.dat'
+                }}
+
+                self.wwm_param = WWM_Param(
+                    template=wwm_param_template,
+                    proc=wwm_proc,
+                    grid=wwm_grid,
+                    init=wwm_init,
+                    bouv=wwm_bouc,
+                    start_datetime=start_date,
+                    end_datetime=start_date+timedelta(days=rnday),
+                    dt=dt,
+                    )
+            else:
+                self.wwm_param = wwm_param
+
+            # Update param and wwm_param to match
+            self.param.core.msc2 = self.wwm_param.nml['grid']['msc']
+            self.param.core.mdc2 = self.wwm_param.nml['grid']['mdc']
+            self.param.opt.nstep_wwm = 1
+            if (self.param.core.dt * self.param.opt.nstep_wwm != self.wwm_param.nml['proc']['deltc']) and (self.wwm_param.nml['proc']['unitc'] == 'sec'):
+                self.wwm_param.nml['proc']['deltc'] = self.param.core.dt*self.param.opt.nstep_wwm
+                self.wwm_param.nml['proc']['unitc'] == 'sec'
+
+            # Define schism-wwm model coupling
+            self.param.opt.icou_elfe_wwm = 1 
+            # !       0: no elevation and no currents in wwm, no wave force in SCHISM (but wave turbulecne, WBL etc are still in SCHISM);
+            # !       1: full coupled (elevation, vel, and wind are all passed to WWM); 
+            # !       2: elevation and currents in wwm, no wave force in SCHISM;  
+            # !       3: no elevation and no currents in wwm, wave force in SCHISM;
+            # !       4: elevation but no currents in wwm, wave force in SCHISM;
+            # !       5: elevation but no currents in wwm, no wave force in SCHISM;
+            # !       6: no elevation but currents in wwm, wave force in SCHISM;
+            # !       7: no elevation but currents in wwm, no wave force in SCHISM;
 
     def run(
         self,
@@ -339,10 +443,13 @@ class ModelDriver:
         vgrid=True,
         fgrid=True,
         param=True,
-        bctides=True,
-        nws=True,
-        stations=True,
+        wwm_param=True,
+        wwmbnd=True,
         use_param_template=False,
+        # use_wwm_param_template=False
+        # bctides=True,
+        # nws=True,
+        stations=True,
         albedo=True,
         diffmax=True,
         diffmin=True,
@@ -355,7 +462,7 @@ class ModelDriver:
         temp_ic=True,
         salt_ic=True,
         # rtofs=True,
-        hydrology=True,
+        # hydrology=True,
     ):
         """Writes to disk the full set of input files necessary to run SCHISM."""
 
@@ -395,6 +502,12 @@ class ModelDriver:
                 self.outdir / param, overwrite, use_template=use_param_template
             )
 
+        if (self.config.waves is not None) and (wwm_param is not False):
+            wwm_param = "wwmparam.nml" if wwm_param is True else param
+            self.wwm_param.write(
+                filename=self.outdir / wwm_param, force=True if overwrite else False, sort=False # consider re-defining .write method so it is like Param.write()
+                )
+
         def obj_write(var, obj, default_filename, overwrite):
             if var is not False and obj is not None:
                 obj.write(
@@ -413,7 +526,10 @@ class ModelDriver:
         obj_write(salt_ic, self.salt_ic, "salt.ic", overwrite)
         obj_write(elev_ic, self.elev_ic, "elev.ic", overwrite)
         obj_write(stations, self.stations, "station.in", overwrite)
+        if (self.config.waves is not None) and (wwm_param is not False):
+            obj_write(wwmbnd, self.config.wwmbnd, "wwmbnd.gr3", overwrite)
 
+        # Write ModelForcing objects    
         self.config.forcings.write(
             self, output_directory, overwrite,
         )
@@ -536,7 +652,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         # itrtype: itrtype.Itrtype = None,
         nws: NWS = None,
         source_sink: Union[List[SourceSink], SourceSink] = None,
-        waves=None,
+        ocean: HycomOpenBoundaryInventory=None, # TODO: add HycomComponent so that: Union[HycomOpenBoundaryInventory, HycomComponent]=None ... consider creating 'ocean' base class 
         stratification: Union[int, str, Stratification] = None,
         albedo: gridgr3.Albedo = None,
         diffmin: gridgr3.Diffmin = None,
@@ -546,6 +662,8 @@ class ModelConfig(metaclass=ModelConfigMeta):
         shapiro: gridgr3.Shapiro = None,
         fluxflag: prop.Fluxflag = None,
         tvdflag: prop.Tvdflag = None,
+        waves: WWM = None,
+        wwmbnd: gridgr3.Gr3 = None,
     ):
         self.hgrid = hgrid
         self.vgrid = vgrid
@@ -565,6 +683,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         self.nws = nws
         self.source_sink = source_sink
         self.waves = waves
+        self.ocean = ocean
         self.stratification = stratification
         self.albedo = albedo
         self.diffmin = diffmin
@@ -574,6 +693,51 @@ class ModelConfig(metaclass=ModelConfigMeta):
         self.fluxflag = fluxflag
         self.tvdflag = tvdflag
         self.estuary = estuary
+        if wwmbnd is not None:
+            self.wwmbnd =  wwmbnd
+        elif (wwmbnd is None) and (self.waves is not None):
+            self.wwnbd = self.set_wwmbnd()
+
+    def set_wwmbnd(self):
+        """Define wwmbnd.gr3 
+        land value = 1
+        island value = -1
+        open boundary value = 2 (dirichlet) or 3 (neumann)
+        """
+
+        # Create Gr3Field object , set default values for grid interior
+        wwmbnd = gridgr3.Gr3Field.constant(self.hgrid,value=int(0))
+        wwmbnd = wwmbnd.to_dict()
+
+        # set land boundary flag
+        flag = int(1)
+        for i in range(len(self.hgrid.boundaries.land)):
+            bound_gdf = self.hgrid.boundaries.land.iloc[i]
+            for i, node_id in enumerate(bound_gdf['index_id']): # index_id is 1-based
+                wwmbnd['nodes'][f'{node_id}'] = (wwmbnd['nodes'][f'{node_id}'][0], flag) # index the 'value' or second element of tupple
+
+        # set island boundary flag
+        flag = int(-1)
+        for i in range(len(self.hgrid.boundaries.interior)):
+            bound_gdf =self.hgrid.boundaries.interior.iloc[i]
+            for i, node_id in enumerate(bound_gdf['index_id']): # index_id is 1-based
+                wwmbnd['nodes'][f'{node_id}'] = (wwmbnd['nodes'][f'{node_id}'][0], flag)
+
+        # set open boundary flag
+        # flag = int(2) # Dirichlet BC
+        flag = int(3)   # Neumann BC
+        for i in range(len(self.hgrid.boundaries.open)):
+            bound_gdf = self.hgrid.boundaries.open.iloc[i]
+            for i, node_id in enumerate(bound_gdf['index_id']): # index_id is 1-based
+                wwmbnd['nodes'][f'{node_id}'] = (wwmbnd['nodes'][f'{node_id}'][0], flag)
+
+        # set Gr3 object from nodes and elements 
+        self.wwmbnd = gridgr3.Gr3(
+            nodes=wwmbnd['nodes'], 
+            elements=wwmbnd['elements'],
+            description='wwmbnd.gr3: node values defined like: 0 (default), 1 (land BC), -1 (island BC), 2 (Dirichlet BC), or 3 (Neumann zero-gradient BC)',
+            crs=wwmbnd['crs']
+            )
 
     def coldstart(
         self,
@@ -593,7 +757,10 @@ class ModelConfig(metaclass=ModelConfigMeta):
         nhot_write: Union[int, timedelta] = None,
         stations: Stations = None,
         server_config: ServerConfig = None,
+        param: Param = None,
+        wwm_param: WWM_Param = None,
         param_template=None,
+        wwm_param_template=None,
         **surface_outputs,
     ) -> ModelDriver:
 
@@ -639,7 +806,10 @@ class ModelConfig(metaclass=ModelConfigMeta):
             nhot_write=nhot_write,
             server_config=server_config,
             ihfskip=ihfskip,
+            param=param,
+            wwm_param=wwm_param,
             param_template=param_template,
+            wwm_param_template=wwm_param_template,
             **surface_outputs,
         )
 
@@ -782,6 +952,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
                 nws=self.nws,
                 source_sink=self.source_sink,
                 waves=self.waves,
+                ocean=self.ocean,
             )
 
         return self._forcings

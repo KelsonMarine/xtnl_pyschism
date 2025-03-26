@@ -251,6 +251,20 @@ class OPT(metaclass=OptMeta):
             del self._nrampbc
 
     @property
+    def if_source(self) -> Union[int, None]:
+        if not hasattr(self, "_if_source"):
+            return 0
+        elif hasattr(self, "_if_source"):
+            return self._if_source
+
+    @if_source.setter
+    def if_source(self, if_source: Union[int, None]):
+        if if_source is not None:
+            self._if_source = if_source
+        else:
+            self._if_source = None
+
+    @property
     def dramp_ss(self) -> Union[float, None]:
         return self._dramp_ss
 

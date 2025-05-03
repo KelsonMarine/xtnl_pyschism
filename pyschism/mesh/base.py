@@ -735,13 +735,23 @@ class Gr3(ABC):
     @figure
     def tricontourf(self, axes=None, show=True, figsize=None, **kwargs):
         if len(self.triangles) > 0:
-            axes.tricontourf(self.x, self.y, self.triangles, self.values, **kwargs)
+            tpc = axes.tricontourf(self.x, self.y, self.triangles, self.values, **kwargs)
+            fig = axes.figure
+            fig.colorbar(tpc, fraction=0.01, pad=0.04)
+        return axes
+    
+    @figure
+    def tricontour(self, axes=None, show=True, figsize=None, **kwargs):
+        if len(self.triangles) > 0:
+            axes.tricontour(self.x, self.y, self.triangles, self.values, **kwargs)
         return axes
 
     @figure
     def tripcolor(self, axes=None, show=True, figsize=None, **kwargs):
         if len(self.triangles) > 0:
-            axes.tripcolor(self.x, self.y, self.triangles, self.values, **kwargs)
+            tpc = axes.tripcolor(self.x, self.y, self.triangles, self.values, **kwargs)
+            fig = axes.figure
+            fig.colorbar(tpc, fraction=0.01, pad=0.04)
         return axes
 
     @figure

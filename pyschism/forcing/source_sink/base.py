@@ -612,7 +612,7 @@ def get_circle_of_radius(lon, lat, radius):
 
 
 class HGridElementPairings:
-    def __init__(self, hgrid: Union[Hgrid, Gr3], lon: Union[list,np.array], lat: Union[list, np.array], workers: int = -1):
+    def __init__(self, hgrid: Union[Hgrid, Gr3], lon: Union[list,np.array], lat: Union[list, np.array], workers: int = -1, depth_threshold: float = None):
         """
         Maps (lon, lat) coordinates to the nearest hgrid element ID.
         
@@ -630,8 +630,16 @@ class HGridElementPairings:
         centroids = []
         element_ids = []
         for element_id, element in hgrid.elements.elements.items():
+            node_ind = list(map(hgrid.nodes.get_index_by_id, element))
+
+            # apply depth threshold: 
+            # an element is wet if all of its nodes and sides are wet, and is dry if any of its nodes or sides becomes dry.
+            # A node/side is wet iff (if and only if) at least 1 of its surrounding element is wet.
+            if depth_threshold is not None:
+                if any(hgrid.nodes.values[node_ind] > depth_threshold):  
+                    continue 
             centroid = LineString(
-                hgrid.nodes.coord[list(map(hgrid.nodes.get_index_by_id, element))]
+                hgrid.nodes.coord[node_ind]
             ).centroid
             centroids.append((centroid.x, centroid.y))
             element_ids.append(element_id)

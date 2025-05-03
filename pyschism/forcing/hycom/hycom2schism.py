@@ -170,8 +170,17 @@ def interp_to_points_3d(dep, y2, x2, bxyz, val):
     val_fd = sp.interpolate.RegularGridInterpolator((dep,y2,x2),np.squeeze(val),'linear', bounds_error=False, fill_value = float('nan'))
     val_int = val_fd(bxyz)
     idxs = np.isnan(val_int)
+    isgood = np.all(np.isfinite(bxyz[~idxs,:]), axis=1) & np.isfinite(val_int[~idxs])
+
     if np.sum(idxs) != 0:
-        val_int[idxs] = sp.interpolate.griddata(bxyz[~idxs,:], val_int[~idxs], bxyz[idxs,:],'nearest')
+        try:
+            # !! FIX ME !!
+            # there seems to be an error here ... when bxyz comes from an LSC2 vgrid, there are nan values in the 0 column of bxyz
+            val_int[idxs] = sp.interpolate.griddata(bxyz[~idxs,:][isgood], val_int[~idxs][isgood], bxyz[idxs,:],'nearest')
+        except:
+            print('hycom2schism.interp_to_points_3d failed ... using nanmean to fill nans ... \n consider testing if .th.nc files can have no-data values -- then this step could be skipped ...')
+            val_int[idxs] = np.nanmean(val_int,axis=0)
+
     idxs = np.isnan(val_int)
     if np.sum(idxs) != 0:
         logger.info(f'There is still missing value for {val}')
@@ -807,7 +816,7 @@ class DownloadHycom:
         elif bbox is not None:
             self.bbox = bbox
 
-    def fetch_data(self, start_date, rnday=1, fmt='schism', bnd=False, nudge=False, sub_sample=1, outdir=None):
+    def fetch_data(self, start_date, rnday=1, fmt='schism', bnd=False, nudge=False, sub_sample=1, outdir='./'):
         '''
         start_date: datetime.datetime
         rnday: integer

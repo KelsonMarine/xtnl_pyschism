@@ -503,7 +503,7 @@ class ModelDriver:
             )
 
         if (self.config.waves is not None) and (wwm_param is not False):
-            wwm_param = "wwmparam.nml" if wwm_param is True else param
+            wwm_param = "wwminput.nml" if wwm_param is True else param
             self.wwm_param.write(
                 filename=self.outdir / wwm_param, force=True if overwrite else False, sort=False # consider re-defining .write method so it is like Param.write()
                 )

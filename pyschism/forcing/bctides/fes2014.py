@@ -14,7 +14,8 @@ from pyschism.forcing.bctides.base import TidalDataProvider
 
 logger = logging.getLogger(__name__)
 
-FES2014_TIDES_EXTRA = 'ocean_tide_extrapolated'
+# FES2014_TIDES_EXTRA = 'ocean_tide_extrapolated' # has NN interp artifacts along the coast
+FES2014_TIDES_EXTRA = 'elevations' # does not have NN inerterp artifacts along the coast
 FES2014_EASTWARD_VEL = 'eastward_velocity'
 FES2014_NORTHWARD_VEL = 'northward_velocity'
 

@@ -66,26 +66,84 @@ class Parametric_Wave_Dataset(WWM):
     ):
         super().__init__()  # Initialize the waves base class
         self.resource = resource
-        self.filewave = 'wave_file'
+        self.filewave = 'wwmbndfiles.dat'
         if ds is None:
-            self.ds = xr.open_dataset(resource)
+            self.ds = xr.open_mfdataset(resource)
         else:
-            self.ds
+            self.ds = ds
 
     @property
     def dtype(self):
         return "Parametric_Wave_Dataset"
 
-    def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
+    def write(self, path: Union[str, os.PathLike], overwrite: bool = True):
         """
         Implements the required write method.
         """
+        
         path = pathlib.Path(path)
         path.mkdir(exist_ok=True)
         print(f"Writing Parametric_Wave_Dataset to {path}, overwrite={overwrite}")
 
-        # Example: Writing a NetCDF file
-        self.ds.to_netcdf(path / f"{self.filewave}.nc", mode="w")
+        # Write each variable to a separate NetCDF file and record the filenames in wwm_inputs.txt.
+        # Adjust the output directory if needed (here, files are written to the current directory).
+        if os.path.isfile(path / self.filewave) and not overwrite:
+            return (print(f'Did not write ww3_*.nc to file -- overwrite == False and files exist in {path}'))
+        elif os.path.isfile(path / self.filewave) and overwrite: 
+            os.remove(path / self.filewave)
+
+        with open(path / self.filewave, "w") as f:
+            for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
+                filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
+                f.write(filename + "\n") 
+        
+        for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
+                filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
+                print(f'writing: {path / filename}')    
+
+                # extract variable
+                ds_var = self.ds[var]
+
+                # apply valid min and valid max
+                valid_min = ds_var.attrs.get("valid_min", -np.inf)  # Default -inf if missing
+                valid_max = ds_var.attrs.get("valid_max", np.inf)  # Default +inf if missing          
+                ds_var = ds_var.where((ds_var >= valid_min) & (ds_var <= valid_max), np.nan) # Mask values outside valid range
+
+                # transpose to expected dimension order from wwm
+                # ds_var = ds_var.transpose("longitude", "latitude", "time") # this format does not work?
+                ds_var = ds_var.transpose("time", "latitude","longitude") # this is the format given with examples of: ncdump -h ww3_hs.nc 
+
+                # set encoding for WWM
+                ds_var.encoding["dtype"]="int32"
+                ds_var.encoding["scale_factor"]=0.002
+                ds_var.encoding["_FillValue"]=-999999
+                # ds_var.encoding["dtype"]="float32"
+                # ds_var.encoding["scale_factor"]=1.0
+                # ds_var.encoding["_FillValue"]=-999999
+
+                # # compression
+                # ds_var.encoding["zlib"]=True
+                # ds_var.encoding["complevel"]=4
+
+                # Define encoding for coordinates
+                encoding = {
+                    "longitude": {"dtype": "float64",'scale_factor': 1.},
+                    "latitude": {"dtype": "float64",'scale_factor': 1.},
+                    "time": {"dtype": "float64",'scale_factor': 1.},
+                    var: ds_var.encoding  # Include variable-specific encoding
+                }
+
+                # print(encoding)
+
+                # write to netcdf
+                ds_var.to_netcdf(
+                    path / filename,
+                    unlimited_dims=['time'],
+                    encoding=encoding,  # Ensures time, lon, lat are double
+                    )
+                
+                # print(ds_var)
+                
 
 
 class Directional_Spectra_Wave_Dataset(WWM):

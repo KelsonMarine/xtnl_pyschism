@@ -752,7 +752,7 @@ class Gr3(ABC):
             tpc = axes.tripcolor(self.x, self.y, self.triangles, self.values, **kwargs)
             fig = axes.figure
             fig.colorbar(tpc, fraction=0.01, pad=0.04)
-        return axes
+        return axes, tpc
 
     @figure
     def triplot(

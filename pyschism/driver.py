@@ -69,6 +69,7 @@ class ModelForcings:
                     end_date=driver.param.core.rnday, # this does not make sense!!
                     overwrite=overwrite,
                     bbox=driver.config.hgrid.get_bbox(output_type="bbox"),
+                    air=True,
                     prc=True, #if driver.config.vgrid.is3D() is True else False,
                     rad=True, #if driver.config.vgrid.is3D() is True else False,
                 )
@@ -306,11 +307,13 @@ class ModelDriver:
                     'lsphe':True if self.param.opt.ics == 2 else False,    # sphericial coords ... True if self.param.opt.ics == 2 else False
                     'lnautin':True } # nautical convention ... True
                             }
+                
                 wwm_grid = {'grid':{
                     'mdc': 36,  # number of wave dir bins
                     'msc' : 24, # number of wave freq bins
                     'igridtype' : 3,
                 }}
+                
                 wwm_init = {'init':{
                     'lhotr': False if hotstart is None else True,
                     'linid': True, 
@@ -327,7 +330,7 @@ class ModelDriver:
                     'lbsp2d' : False,
                     'iboundformat':3 if isinstance(self.config.waves,Parametric_Wave_Dataset) else 6, 
                     'fileboudn' : 'wwmbnd.gr3',
-                    'fileave' : 'bndfiles.dat'
+                    'filewave' : 'bndfiles.dat'
                 }}
 
                 self.wwm_param = WWM_Param(
@@ -335,10 +338,11 @@ class ModelDriver:
                     proc=wwm_proc,
                     grid=wwm_grid,
                     init=wwm_init,
-                    bouv=wwm_bouc,
+                    bouc=wwm_bouc,
                     start_datetime=start_date,
                     end_datetime=start_date+timedelta(days=rnday),
                     dt=dt,
+                    # filewave=wwm_bouc['bouc']['filewave'] # throws and error when forcing files do not exist yet
                     )
             else:
                 self.wwm_param = wwm_param
@@ -724,8 +728,8 @@ class ModelConfig(metaclass=ModelConfigMeta):
                 wwmbnd['nodes'][f'{node_id}'] = (wwmbnd['nodes'][f'{node_id}'][0], flag)
 
         # set open boundary flag
-        # flag = int(2) # Dirichlet BC
-        flag = int(3)   # Neumann BC
+        flag = int(2) # Dirichlet BC
+        # flag = int(3)   # Neumann BC -- this did not apply any BC for IBOUNDFORMAT == 3 in wwminput.nml
         for i in range(len(self.hgrid.boundaries.open)):
             bound_gdf = self.hgrid.boundaries.open.iloc[i]
             for i, node_id in enumerate(bound_gdf['index_id']): # index_id is 1-based

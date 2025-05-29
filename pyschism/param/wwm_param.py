@@ -100,6 +100,8 @@ class WWM_Param:
         
         if filewave is not None:
             self.update_bouc_datetime(filewave=filewave)
+        else:
+            self.update_datetime(start_datetime=start_datetime, end_datetime=end_datetime, dt=dt, rnday=rnday, sections=['bouc'])
 
     def update_datetime(self, start_datetime: Union[int, float, datetime], end_datetime: Union[int, float, datetime], dt: Union[int, float, timedelta, dict], rnday: Union[int, float, timedelta]=None, sections: list = None):
         """
@@ -110,7 +112,7 @@ class WWM_Param:
             rnday : duration of simulation ... must agree with start_datetime and end_datetime.
             dt: dict like {'proc':timedelta(seconds=6000),'history':timedelta(seconds=3600)} or use default values. 
 
-        Note! 'bouc' section time variables are not modified here. 
+        Note! 'bouc' section time variables are not modified here by default. 
 
         TO DO: have a more dynamic way to set deltc (dt) values. It can be passed in as a 
         """

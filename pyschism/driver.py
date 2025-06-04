@@ -119,10 +119,10 @@ class ModelForcings:
         if self.waves is not None:
             print('\nWriting ModelForcings.waves ...')
             self.waves.write(
-                output_directory,
+                outdir=output_directory,
                 start_datetime=driver.param.opt.start_date,
-                rnday=driver.param.core.rnday,
-                bbox=driver.config.hgrid.bbox.bounds,
+                rnday=driver.param.core.rnday+1,
+                bbox=driver.config.hgrid.bbox,
                     )
    
 
@@ -448,6 +448,7 @@ class ModelDriver:
         fgrid=True,
         param=True,
         wwm_param=True,
+        wwmhgrid=True,
         wwmbnd=True,
         use_param_template=False,
         # use_wwm_param_template=False
@@ -531,6 +532,7 @@ class ModelDriver:
         obj_write(elev_ic, self.elev_ic, "elev.ic", overwrite)
         obj_write(stations, self.stations, "station.in", overwrite)
         if (self.config.waves is not None) and (wwm_param is not False):
+            os.symlink(self.outdir / 'hgrid.gr3',self.outdir / 'hgrid_WWM.gr3', False)
             obj_write(wwmbnd, self.config.wwmbnd, "wwmbnd.gr3", overwrite)
 
         # Write ModelForcing objects    
@@ -667,6 +669,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         fluxflag: prop.Fluxflag = None,
         tvdflag: prop.Tvdflag = None,
         waves: WWM = None,
+        wwmhgrid: Hgrid = None, 
         wwmbnd: gridgr3.Gr3 = None,
     ):
         self.hgrid = hgrid
@@ -697,6 +700,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         self.fluxflag = fluxflag
         self.tvdflag = tvdflag
         self.estuary = estuary
+        self.wwmhgrid = wwmhgrid
         if wwmbnd is not None:
             self.wwmbnd =  wwmbnd
         elif (wwmbnd is None) and (self.waves is not None):

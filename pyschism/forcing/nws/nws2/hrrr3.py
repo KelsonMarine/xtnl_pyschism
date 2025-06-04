@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pathlib
 import tempfile
 import logging
@@ -142,7 +142,7 @@ class AWSGrib2Inventory:
         grbfiles.sort()
         return grbfiles
 
-class HRRR:
+class HRRR: # TO DO !! make (SfluxDataset):
 
     def __init__(self, level=2, region='conus', bbox=None, pscr=None, outdir=None):
 
@@ -156,20 +156,22 @@ class HRRR:
     def write(self, start_date, rnday, air: bool=True, prc: bool=True, rad: bool=True):
 
         start_date = nearest_cycle() if start_date is None else start_date 
-        
-        if (start_date + timedelta(days=rnday)) > datetime.utcnow():
+        if type(rnday) == timedelta:
+            rnday = rnday.days
+
+        if (start_date + timedelta(days=rnday)) > datetime.now(timezone.utc):
             logger.info(f"End date is beyond current time, set rnday to one day and record to 2 days")
             rnday = 1
             self.record = 2 #days
 
-        end_date = start_date + timedelta(hours=rnday * self.record + 1)
+        end_date = start_date + timedelta(days=rnday * self.record)
         logger.info(f'start time is {start_date}, end time is {end_date}')
 
         if self.outdir is None:
             #self.outdir = pathlib.Path(start_date.strftime("%Y%m%d"))
             self.outdir = pathlib.Path("sflux")
-            self.outdir.mkdir(parents=True, exist_ok=True)
-        
+        self.outdir.mkdir(parents=True, exist_ok=True)
+
         datevector = np.arange(
             start_date, 
             start_date + timedelta(days=rnday), 
@@ -265,7 +267,7 @@ class HRRR:
         #write netcdf
         bdate = date.strftime('%Y %m %d %H').split(' ')
         bdate = [int(q) for q in bdate[:4]] + [0]
-
+        time_days = np.round((times - date.to_datetime64()) / np.timedelta64(1, 'D'), 5).astype('float64') # float32 was giving milisecond offsets in netcdf files, causing model to crash...
         if air:
             ds = xr.Dataset(
                 {
@@ -276,7 +278,7 @@ class HRRR:
                     'prmsl': (['time', 'ny_grid', 'nx_grid'], np.array(prmsl)),
                 },
                 coords = {
-                    'time': np.round((times - date.to_datetime64()) / np.timedelta64(1, 'D'), 5).astype('float32'),
+                    'time': time_days,
                     'lon': (['ny_grid', 'nx_grid'], lon),
                     'lat': (['ny_grid', 'nx_grid'], lat)
                 }
@@ -340,7 +342,7 @@ class HRRR:
                     'prate': (['time', 'ny_grid', 'nx_grid'], np.array(prate)),
                 },
                 coords = {
-                    'time': np.round((times - date.to_datetime64()) / np.timedelta64(1, 'D'), 5).astype('float32'),
+                    'time': time_days,
                     'lon': (['ny_grid', 'nx_grid'], lon),
                     'lat': (['ny_grid', 'nx_grid'], lat)
                 }
@@ -381,7 +383,7 @@ class HRRR:
                     'dswrf': (['time', 'ny_grid', 'nx_grid'], np.array(dswrf)),
                 },
                 coords = {
-                    'time': np.round((times - date.to_datetime64()) / np.timedelta64(1, 'D'), 5).astype('float32'),
+                    'time': time_days,
                     'lon': (['ny_grid', 'nx_grid'], lon),
                     'lat': (['ny_grid', 'nx_grid'], lat)
                 }

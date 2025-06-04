@@ -76,12 +76,19 @@ class Parametric_Wave_Dataset(WWM):
     def dtype(self):
         return "Parametric_Wave_Dataset"
 
-    def write(self, path: Union[str, os.PathLike], overwrite: bool = True):
+    def write(
+            self, 
+            outdir: Union[str, os.PathLike], 
+            start_datetime: datetime = None,
+            rnday: timedelta = None,
+            end_datetime: datetime = None,
+            bbox = None,
+            overwrite: bool = True):
         """
         Implements the required write method.
         """
         
-        path = pathlib.Path(path)
+        path = pathlib.Path(outdir)
         path.mkdir(exist_ok=True)
         print(f"Writing Parametric_Wave_Dataset to {path}, overwrite={overwrite}")
 
@@ -96,13 +103,35 @@ class Parametric_Wave_Dataset(WWM):
             for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
                 filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
                 f.write(filename + "\n") 
-        
+
+        # Subset ds based on optional inputs
+        if start_datetime is None and end_datetime is None and rnday is None:
+            ds = self.ds
+        else:
+            if start_datetime is None:
+                start_datetime = self.ds.time.isel(time=0).value
+            elif end_datetime is None and rnday is not None:
+                end_datetime = start_datetime + rnday
+
+            assert (end_datetime == start_datetime + rnday)
+
+            # Slice in time
+            ds = ds.sel(time=slice(start_datetime, end_datetime))
+
+        # Slice in space
+        if bbox is not None:
+            ds = ds.sel(
+                longitude=slice(bbox.xmin, bbox.xmax),
+                latitude=slice(bbox.ymin, bbox.ymax)
+            )
+
+        # write to netcdf
         for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
                 filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
                 print(f'writing: {path / filename}')    
 
                 # extract variable
-                ds_var = self.ds[var]
+                ds_var = ds[var]
 
                 # apply valid min and valid max
                 valid_min = ds_var.attrs.get("valid_min", -np.inf)  # Default -inf if missing

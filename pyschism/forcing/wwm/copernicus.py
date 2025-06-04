@@ -6,6 +6,9 @@ import os, pathlib
 import subprocess
 from datetime import timedelta, datetime, timezone
 import numpy as np
+import pandas as pd
+import shapely
+
 from pyschism.forcing.wwm.base import WWM, Parametric_Wave_Dataset, Directional_Spectra_Wave_Dataset
 import pyschism.forcing.wwm as wwm 
 from typing import Union, Literal
@@ -22,6 +25,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
         username: str = None,
         password: str = None,
         filepath: Union[pathlib.Path,str]  = None,
+        iboundformat = 3 # [3 or 6]
     ):
     
         """Loads Parametric_Wave_Dataset to use as waves input."""
@@ -34,25 +38,40 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
 
         self.username = username
         self.password = password
+        self.iboundformat = iboundformat
         self.outdir = pathlib.Path('./')
 
     @property
-    def copernicus_wwm_variable_dict(self):
-        return {
-            "VHM0": "hs",   # Significant wave height [m]
-            "VTPK": "tp",   # Peak wave period [s]
-            "VTM02": "t02", # Mean wave period (second moment) [s]
-            "VMDR": "dir",  # Wave direction [degrees]
-        }
+    def variables(self):
+        if self.iboundformat==3:
+            variables = {
+                "VHM0": "hs",   # Significant wave height [m]
+                "VTPK": "tp",   # Peak wave period [s]
+                "VTM02": "t02", # Mean wave period (second moment) [s]
+                "VMDR": "dir",  # Wave direction [degrees]
+            }
+        elif self.iboundformat==6:
+            variables = {
+                "VHM0_SW1": "hs_swell_1", # "sea_surface_primary_swell_wave_significant_height",
+                "VHM0_SW2": "hs_swell_2", # "sea_surface_secondary_swell_wave_significant_height",
+                "VHM0_WW": "hs_windwave", #"sea_surface_wind_wave_significant_height",
+                "VMDR_SW1": "dir_swell_1", #"sea_surface_primary_swell_wave_from_direction",
+                "VMDR_SW2": "dir_swell_2", #"sea_surface_secondary_swell_wave_from_direction",
+                "VMDR_WW": "dir_windwave", # "sea_surface_wind_wave_from_direction",
+                "VTM01_SW1": "t01_swell_1", # "sea_surface_primary_swell_wave_mean_period",
+                "VTM01_SW2": "t01_swell_2", #"sea_surface_secondary_swell_wave_mean_period",
+                "VTM01_WW": "t01_windwave", #"sea_surface_wind_wave_mean_period",
+            }
+        return variables
     
     # @property
     # def copernicusmarine_subset_filename(self):
     #     # lonlat_bbox=hgrid.bbox.bounds
-    #     minimum_longitude=self.bbox[0]
-    #     minimum_latitude=self.bbox[1]
-    #     maximum_longitude=self.bbox[0] + self.bbox[2]
-    #     maximum_latitude=self.bbox[1] + self.bbox[3]
-    #     copernicusmarine_subset_filename = self.outdir / f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={minimum_longitude}_{maximum_longitude}_N={minimum_latitude}_{maximum_latitude}_time={self.start_datetime}_{self.end_datetime}.nc"
+    #     min_lon=self.bbox[0]
+    #     min_lat=self.bbox[1]
+    #     max_lon=self.bbox[0] + self.bbox[2]
+    #     max_lat=self.bbox[1] + self.bbox[3]
+    #     copernicusmarine_subset_filename = self.outdir / f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon}_{max_lon}_N={min_lat}_{max_lat}_time={self.start_datetime}_{self.end_datetime}.nc"
     #     return copernicusmarine_subset_filename
   
     def describe(self):
@@ -70,6 +89,8 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
             rnday: Union[float, int, timedelta] = None,
             end_datetime: datetime = None,
             bbox: Union[list, tuple] = None,
+            hgrid: pyschism.mesh.Hgrid = None, # for use when self.iboundformat == 6 --> use open boundary to define stations
+            stations = shapely.LineString,  # for use when self.iboundformat == 6 --> format like [lon, lat] ... then download iteratively to build netcdf
             overwrite: bool = True, # TODO: add error catching here (always overwrites!)
             # cleanup: bool = True
             ) -> pathlib.Path:
@@ -80,58 +101,116 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
             end_datetime = start_datetime + rnday
             
         # define a dict for later renaming
-        variables  = self.copernicus_wwm_variable_dict
+        variables  = self.variables
 
         outdir = pathlib.Path(outdir)
         outdir.mkdir(exist_ok=True)
 
-        # lonlat_bbox=hgrid.bbox.bounds
-        # bbox_bounds = bbox.bounds
-        minimum_longitude=bbox.xmin
-        minimum_latitude=bbox.ymin
-        maximum_longitude=bbox.xmax
-        maximum_latitude=bbox.ymax
-        
-        assert isinstance(outdir, pathlib.Path), "outdir must be a pathlib.Path object"
+        if self.iboundformat == 3:
+            # lonlat_bbox=hgrid.bbox.bounds
+            # bbox_bounds = bbox.bounds
+            min_lon=bbox.xmin
+            min_lat=bbox.ymin
+            max_lon=bbox.xmax
+            max_lat=bbox.ymax
+            
+            assert isinstance(outdir, pathlib.Path), "outdir must be a pathlib.Path object"
 
-        filename = (
-            f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={minimum_longitude:1.2f}_{maximum_longitude:1.2f}"
-            f"_N={minimum_latitude:1.2f}_{maximum_latitude:1.2f}"
+            filename = (
+                f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+                f"_N={min_lat:1.2f}_{max_lat:1.2f}"
+                f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
+            )
+            copernicusmarine_subset_filename = outdir / filename        
+            if not copernicusmarine_subset_filename.is_file():
+                # --- Subset dataset
+                copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                copernicusmarine.subset(
+                    dataset_id=self.dataset_id,
+                    variables=variables.keys(),
+                    minimum_longitude=min_lon,
+                    minimum_latitude=min_lat,
+                    maximum_longitude=max_lon,
+                    maximum_latitude=max_lat,
+                    coordinates_selection_method='inside',
+                    start_datetime=start_datetime, 
+                    end_datetime=end_datetime,
+                    output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                    overwrite=overwrite
+                    # output_directory = "./-" # default is current directory
+                    )
+        elif self.iboundformat == 6:
+
+            if stations:
+
+                if type(stations) == pd.DataFrame:
+                    lons = stations.lon.values
+                    lats = stations.lat.values
+                elif type(stations) == np.ndarray:
+                    lons = stations[0,:]
+                    lats = stations[1,:]
+                elif type(stations) == shapely.LineString:
+                    lons = stations.xy[0]
+                    lats = stations.xy[1]
+
+            elif hgrid:
+
+                open_boundary_gdf = hgrid.boundaries.open
+                lons = open_boundary_gdf.geometry.x
+                lats = open_boundary_gdf.geometry.y
+
+            elif bbox:
+                raise("'bbox' not implemented when 'iboundformat' == 6 -- download data along open boundary using 'stations' or 'hgrid' as input")
+
+            min_lon = np.min(lons)
+            min_lat = np.min(lats)
+            max_lon = np.max(lons)
+            max_lat = np.max(lats)
+
+            self.lon = lons
+            self.lat = lats
+
+            filename = (
+            f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+            f"_N={min_lat:1.2f}_{max_lat:1.2f}"
             f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
-        )
-        copernicusmarine_subset_filename = outdir / filename        
-        if not copernicusmarine_subset_filename.is_file():
-            # --- Subset dataset
-            copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
-            copernicusmarine.subset(
-                dataset_id=self.dataset_id,
-                variables=variables.keys(),
-                minimum_longitude=minimum_longitude,
-                minimum_latitude=minimum_latitude,
-                maximum_longitude=maximum_longitude,
-                maximum_latitude=maximum_latitude,
-                start_datetime=start_datetime, #-timedelta(hours=6),
-                end_datetime=end_datetime,
-                output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
-                overwrite=overwrite
-                # output_directory = "./-" # default is current directory
-                )
-        
+            )
+            copernicusmarine_subset_filename = outdir / filename        
+
+            if not copernicusmarine_subset_filename.is_file():
+
+                # --- Subset dataset
+                copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                # os.makedirs( outdir / 'tmp' ,exist_ok=True)
+                # fnames = []
+                # for (lon,lat) in zip(lons,lats):
+                    # fname = outdir / 'tmp' / f"{self.dataset_id}_{lon}_{lat}.nc"
+                copernicusmarine.subset(
+                    dataset_id=self.dataset_id,
+                    variables=variables.keys(),
+                    minimum_longitude=min_lon,
+                    minimum_latitude=min_lat,
+                    maximum_longitude=max_lon,
+                    maximum_latitude=max_lat,
+                    coordinates_selection_method='inside',
+                    start_datetime=start_datetime, 
+                    end_datetime=end_datetime,
+                    output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                    overwrite=overwrite
+                    # output_directory = "./-" # default is current directory
+                    )
+            
         return copernicusmarine_subset_filename
 
     def format_GLOBAL_MULTIYEAR_WAV_001_032(self,fname:pathlib.Path):
         
         # --- Reformat Dataset
-
         ds = xr.open_dataset(fname)
-
-        # Rename variables
-        ds = ds.rename(name_dict=self.copernicus_wwm_variable_dict)
-
+        
         # Set time to Julian Days since base date of 1990-01-01
         base_date_str = '1990-01-01 00:00:00'
         base_datetime64 = np.datetime64(base_date_str) # if this throws an error, try using: np.datetime64(start_datetime)
-
+        
         time_in_julian_days = (ds['time'].values - base_datetime64) / np.timedelta64(1, 'D')
         ds['time'] = time_in_julian_days
         ds['time'].attrs = {
@@ -144,62 +223,108 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
                     'axis':'T',
                 }
         
-        ds['longitude'].attrs['units'] = 'degree_east'
-        ds['longitude'].attrs['valid_min'] = -180.
-        ds['longitude'].attrs['valid_max'] = 360.
-        ds['longitude'].attrs['axis'] = 'X'
+        if self.iboundformat == 3:
 
-        ds['latitude'].attrs['units'] = 'degree_north'
-        ds['latitude'].attrs['valid_min'] = -90.
-        ds['latitude'].attrs['valid_max'] = 180.
-        ds['latitude'].attrs['axis'] = 'Y'        
+            # Rename variables
+            ds = ds.rename(name_dict=self.variables)
 
-        # hs attr
-        ds['hs'].attrs["valid_min"] = 0.
-        ds['hs'].attrs["valid_max"] = 100.
+            ds['longitude'].attrs['units'] = 'degree_east'
+            ds['longitude'].attrs['valid_min'] = -180.
+            ds['longitude'].attrs['valid_max'] = 360.
+            ds['longitude'].attrs['axis'] = 'X'
 
-        # Add a peak wave frequency variable
-        ds["fp"] = 1 / ds["tp"]
-        ds["fp"].attrs['long_name']='spectral peak wave frequency'
-        ds["fp"].attrs['standard_name']='sea_surface_wave_frequency_at_variance_spectral_density_maximum'
-        ds["fp"].attrs['units']='s^-1'
-        ds['fp'].attrs["valid_min"] = 0.02
-        ds['fp'].attrs["valid_max"] = 2.
+            ds['latitude'].attrs['units'] = 'degree_north'
+            ds['latitude'].attrs['valid_min'] = -90.
+            ds['latitude'].attrs['valid_max'] = 180.
+            ds['latitude'].attrs['axis'] = 'Y'        
 
-        # !! Fix Me: unclear on def of t02 in schism-wwm ... is it mean freq or mean period?
+            # hs attr
+            ds['hs'].attrs["valid_min"] = 0.
+            ds['hs'].attrs["valid_max"] = 100.
 
-        # # # t02 (mean wave period) 
-        ds['t02'] = ds['t02'] + np.nan # test if this var even matters!
-        ds['t02'].attrs["valid_min"] = 0
-        ds['t02'].attrs["valid_max"] = 50.
+            # Add a peak wave frequency variable
+            ds["fp"] = 1 / ds["tp"]
+            ds["fp"].attrs['long_name']='spectral peak wave frequency'
+            ds["fp"].attrs['standard_name']='sea_surface_wave_frequency_at_variance_spectral_density_maximum'
+            ds["fp"].attrs['units']='s^-1'
+            ds['fp'].attrs["valid_min"] = 0.02
+            ds['fp'].attrs["valid_max"] = 2.
 
-        # # t02 (wave frequency at mean wave period -- this name does not make sense!)
-        # ds["t02"] = 1 / ds["t02"] # not sure why it has the same name in SCHISM as the mean wave period ?
-        # ds["t02"].attrs['long_name']='mean wave frequency'
-        # ds["t02"].attrs['standard_name']='sea_surface_mean_wave_frequency_from_variance_spectral_density_second_frequency_moment'
-        # ds["t02"].attrs['units']='s^-1'
-        # ds['t02'].attrs["valid_min"] = 0.02
-        # ds['t02'].attrs["valid_max"] = 2.
+            # !! Fix Me: unclear on def of t02 in schism-wwm ... is it mean freq or mean period?
 
-        # dir
-        ds['dir'].attrs["valid_min"] = 0.
-        ds['dir'].attrs["valid_max"] = 360.
+            # # # t02 (mean wave period) 
+            ds['t02'] = ds['t02'] + np.nan # test if this var even matters!
+            ds['t02'].attrs["valid_min"] = 0
+            ds['t02'].attrs["valid_max"] = 50.
 
-        # Add directional spreading (estimated!)
-        n, dspr_estimate = wwm.base.get_wave_spr_DNV(ds["tp"], showPlots=False)
-        ds["spr"] = dspr_estimate
-        ds['spr'].attrs["standard_name"] = 'directional_spreading'
-        ds['spr'].attrs["long_name"] = 'Mean directional wave spread dspr'
-        ds['spr'].attrs["units"] = 'deg'
-        ds['spr'].attrs["description"] = 'directional spreading estimate based on sea_surface_wave_period_at_variance_spectral_density_maximum'
-        ds['spr'].attrs["valid_min"] = 0.
-        ds['spr'].attrs["valid_max"] = 90.
+            # # t02 (wave frequency at mean wave period -- this name does not make sense!)
+            # ds["t02"] = 1 / ds["t02"] # not sure why it has the same name in SCHISM as the mean wave period ?
+            # ds["t02"].attrs['long_name']='mean wave frequency'
+            # ds["t02"].attrs['standard_name']='sea_surface_mean_wave_frequency_from_variance_spectral_density_second_frequency_moment'
+            # ds["t02"].attrs['units']='s^-1'
+            # ds['t02'].attrs["valid_min"] = 0.02
+            # ds['t02'].attrs["valid_max"] = 2.
 
-        # Drop tp (not needed for WWM)
-        ds = ds.drop_vars("tp")
+            # dir
+            ds['dir'].attrs["valid_min"] = 0.
+            ds['dir'].attrs["valid_max"] = 360.
 
-        self.pwd = Parametric_Wave_Dataset(ds=ds)
-        
+            # Add directional spreading (estimated!)
+            n, dspr_estimate = wwm.base.get_wave_spr_DNV(ds["tp"], showPlots=False)
+            ds["spr"] = dspr_estimate
+            ds['spr'].attrs["standard_name"] = 'directional_spreading'
+            ds['spr'].attrs["long_name"] = 'Mean directional wave spread dspr'
+            ds['spr'].attrs["units"] = 'deg'
+            ds['spr'].attrs["description"] = 'directional spreading estimate based on sea_surface_wave_period_at_variance_spectral_density_maximum'
+            ds['spr'].attrs["valid_min"] = 0.
+            ds['spr'].attrs["valid_max"] = 90.
+
+            # Drop tp (not needed for WWM)
+            ds = ds.drop_vars("tp")
+
+            self.Parametric_Wave_Dataset = Parametric_Wave_Dataset(ds=ds)
+
+        elif self.iboundformat == 6:
+        # netcdf DUCK94_wave_spectra_8m_array {
+        # dimensions:
+        #         station = 1 ;
+        #         time = 97 ;
+        #         frequency = 62 ;
+        #         direction = 72 ;
+        # variables:
+        # double time(time) ;
+        #         time:long_name = "julian day (UT)" ;
+        #         time:standard_name = "time" ;
+        #         time:units = "days since 1990-01-01 00:00:00" ;
+        #         time:conventions = "relative julian days with decimal part (as parts of the day )" ;
+        # double longitude(time, station) ;
+        #         longitude:long_name = "longitude" ;
+        #         longitude:standard_name = "longitude" ;
+        #         longitude:units = "degree_east" ;
+        # double latitude(time, station) ;
+        #         latitude:long_name = "latitude" ;
+        #         latitude:standard_name = "latitude" ;
+        #         latitude:units = "degree_east" ;
+        # float frequency(frequency) ;
+        #         frequency:long_name = "frequency of center band" ;
+        #         frequency:standard_name = "sea_surface_wave_frequency" ;
+        #         frequency:globwave_name = "frequency" ;
+        #         frequency:units = "s-1" ;
+        # float direction(direction) ;
+        #         direction:long_name = "sea surface wave to direction" ;
+        #         direction:standard_name = "sea_surface_wave_to_direction" ;
+        #         direction:globwave_name = "direction" ;
+        #         direction:units = "degree" ;
+        #         direction:conventions = "0� is True East" ;
+        # float efth(time, station, frequency, direction) ;
+        #         efth:long_name = "sea surface wave directional variance spectral density" ;
+        #         efth:standard_name = "sea_surface_wave_directional_variance_spectral_density" ;
+        #         efth:globwave_name = "directional_variance_spectral_density" ;
+        #         efth:units = "m2 s rad-1" ;
+
+            self.Directional_Spectra_Wave_Dataset = Directional_Spectra_Wave_Dataset(ds=ds)
+
+            
     def write(self, 
             outdir: pathlib.Path = pathlib.Path('./'), 
             start_datetime: datetime = None,
@@ -220,7 +345,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
         
         self.format_GLOBAL_MULTIYEAR_WAV_001_032(copernicusmarine_subset_filename)
 
-        self.pwd.write(path=outdir,overwrite=overwrite)
+        self.Parametric_Wave_Dataset.write(outdir=outdir,overwrite=overwrite)
         
 class GLOBAL_MULTIYEAR_WAV_001_032_Directional(Directional_Spectra_Wave_Dataset):
 
@@ -255,7 +380,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032_Directional(Directional_Spectra_Wave_Dataset)
 
     def __init__(
         self,
-        ds: Directional_Spectra_Wave_Dataset = None,
+        dswd: Directional_Spectra_Wave_Dataset = None,
         dataset_id: Literal['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H'] =  'cmems_mod_glo_wav_myint_0.2deg_PT3H',
         username: str = None,
         password: str = None
@@ -264,8 +389,8 @@ class GLOBAL_MULTIYEAR_WAV_001_032_Directional(Directional_Spectra_Wave_Dataset)
         """Access GLOBAL_MULTIYEAR_WAV_001_032 data to use as waves input."""
         self.dataset_id = dataset_id
         self.filewave = 'bndfiles.dat'
-        if waves is not None:
-            self.ds = ds
+        if dswd is not None:
+            self.dswd = dswd
         else:
             if username is not None and password is not None:            
                 copernicusmarine.login(username=username,password=password,force_overwrite=True)
@@ -315,20 +440,20 @@ class GLOBAL_MULTIYEAR_WAV_001_032_Directional(Directional_Spectra_Wave_Dataset)
 
         # lonlat_bbox=hgrid.bbox.bounds
         lonlat_bbox=bbox
-        minimum_longitude=lonlat_bbox[0]
-        minimum_latitude=lonlat_bbox[1]
-        maximum_longitude=lonlat_bbox[0] + lonlat_bbox[2]
-        maximum_latitude=lonlat_bbox[1] + lonlat_bbox[3]
+        min_lon=lonlat_bbox[0]
+        min_lat=lonlat_bbox[1]
+        max_lon=lonlat_bbox[0] + lonlat_bbox[2]
+        max_lat=lonlat_bbox[1] + lonlat_bbox[3]
 
         # --- Subset dataset
         output_tmp_filename = outdir / f"{self.dataset_id}_subset_tmp.nc"
         copernicusmarine.subset(
             dataset_id=self.dataset_id,
             variables=variables.keys(),
-            minimum_longitude=minimum_longitude,
-            minimum_latitude=minimum_latitude,
-            maximum_longitude=maximum_longitude,
-            maximum_latitude=maximum_latitude,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
             start_datetime=start_datetime,
             end_datetime=end_datetime,
             output_filename = output_tmp_filename, # if extension is .zarr, file is downloaded in Zarr format 

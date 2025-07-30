@@ -5,6 +5,7 @@ import pathlib
 import subprocess
 import tempfile
 from typing import List, Union  # , Iterable
+import f90nml
 
 # import numpy as np
 
@@ -17,7 +18,7 @@ from pyschism.forcing.source_sink import SourceSink, NationalWaterModel
 from pyschism.forcing.nws.base import NWS
 from pyschism.forcing.nws.nws2 import NWS2
 from pyschism.forcing.nws.best_track import BestTrackForcing
-from pyschism.forcing.wwm.base import WWM, Parametric_Wave_Dataset, Directional_Spectra_Wave_Dataset
+from pyschism.forcing.wwm.base import WWM, WWM_IBOUNDFORMAT_1, WWM_IBOUNDFORMAT_3, Directional_Spectra_Wave_Dataset
 from pyschism.forcing.hycom.hycom2schism import OpenBoundaryInventory as HycomOpenBoundaryInventory
 from pyschism.forcing.hycom.gofs import HycomComponent
 
@@ -37,12 +38,13 @@ def raise_type_error(argname, obj, cls):
     )
 
 class ModelForcings:
-    def __init__(self, bctides=None, nws=None, source_sink=None, waves=None, ocean=None):
+    def __init__(self, bctides=None, nws=None, source_sink=None, waves=None, ocean=None, bctides_flags=None):
         self.bctides = bctides
         self.nws = nws
         self.source_sink = source_sink
         self.waves = waves
         self.ocean = ocean
+        self.bctides_flags = bctides_flags
 
     def write(
         self,
@@ -104,6 +106,10 @@ class ModelForcings:
         if self.ocean is not None:
             print('\nWriting ModelForcings.ocean ...')
             if isinstance(self.ocean, HycomOpenBoundaryInventory):
+                ocean_bnd_ids = [] # get open boundaries where ocean forcing is applied 
+                for i, flags in enumerate(self.bctides_flags):
+                    if any(f in [4, 5] for f in flags):  
+                        ocean_bnd_ids.append(i)
                 self.ocean.fetch_data(
                     outdir=output_directory,
                     start_date=driver.param.opt.start_date,
@@ -111,20 +117,34 @@ class ModelForcings:
                     elev2D=True, 
                     TS=True, 
                     UV=True,
+                    ocean_bnd_ids=ocean_bnd_ids
                     )
+                
             elif isinstance(self.ocean,HycomComponent):
                 print('\nWriting ModelForcings.ocean.HycomComponent not implemented yet! ... skipping ...\n')
 
 
         if self.waves is not None:
-            print('\nWriting ModelForcings.waves ...')
-            self.waves.write(
-                outdir=output_directory,
-                start_datetime=driver.param.opt.start_date,
-                rnday=driver.param.core.rnday+1,
-                bbox=driver.config.hgrid.bbox,
-                    )
-   
+            if isinstance(self.waves, WWM_IBOUNDFORMAT_3):
+                print('\nWriting ModelForcings.waves ...')
+                self.waves.write(
+                    outdir=output_directory,
+                    start_datetime=driver.param.opt.start_date,
+                    rnday=driver.param.core.rnday+1,
+                    bbox=driver.config.hgrid.bbox,
+                        )
+            elif  isinstance(self.waves, WWM_IBOUNDFORMAT_1):
+                wwminput_nml = pathlib.Path(output_directory / 'wwminput.nml')
+                if wwminput_nml.exists():
+                    parser = f90nml.Parser()
+                    nml = parser.read(wwminput_nml)
+                    wwm_bouc = self.waves.write() # get dictionary ouput
+                    nml.patch(wwm_bouc)
+                    nml.uppercase = True
+                    os.remove(wwminput_nml)
+                    f90nml.write(nml, wwminput_nml,force=False,sort=False)
+                    print(f'WWM_IBOUNDFORMAT_1.write() patched {wwminput_nml}')
+
 
 class Gr3FieldTypes(Enum):
     ALBEDO = gridgr3.Albedo
@@ -310,28 +330,50 @@ class ModelDriver:
                 
                 wwm_grid = {'grid':{
                     'mdc': 36,  # number of wave dir bins
-                    'msc' : 24, # number of wave freq bins
+                    'msc' : 30, # number of wave freq bins
                     'igridtype' : 3,
                 }}
                 
-                wwm_init = {'init':{
-                    'lhotr': False if hotstart is None else True,
-                    'linid': True, 
-                    'initstyle':2, # read from netcdf when iboundformat=3
-                }}
                 
-                wwm_bouc = {'bouc':{
-                    'lbcse': True,
-                    'lbinter' : True,
-                    'lbcwa' : False,
-                    'lbcsp' : False if isinstance(self.config.waves,Parametric_Wave_Dataset) else True,
-                    'linhom' : True,
-                    'lbsp1d' : False,
-                    'lbsp2d' : False,
-                    'iboundformat':3 if isinstance(self.config.waves,Parametric_Wave_Dataset) else 6, 
-                    'fileboudn' : 'wwmbnd.gr3',
-                    'filewave' : 'bndfiles.dat'
-                }}
+                if isinstance(self.config.waves,WWM_IBOUNDFORMAT_1):
+
+                    wwm_init = {'init':{
+                        'lhotr': False if hotstart is None else True,
+                        'linid': False, 
+                        'initstyle':1, # 1 - Parametric Jonswap
+                    }}
+
+                    wwm_bouc = {'bouc':{
+                        'lbcse': True,      # The wave boundary data is time dependent
+                        'lbinter' : False,  # Do interpolation in time if LBCSE=T
+                        'lbcwa' : True,     # Parametric Wave Spectra
+                        'lbcsp' : False,    # Specify non-parametric wave spectra in FILEWAVE
+                        'linhom' : False,    # Non Uniform wave b.c. in space
+                        'iboundformat':1,   # 1 ~ WWM 
+                        'fileboudn' : 'wwmbnd.gr3', # Boundary file defining boundary and Neumann nodes
+                    }}
+
+                if isinstance(self.config.waves,WWM_IBOUNDFORMAT_3):
+                    wwm_init = {'init':{
+                        'lhotr': False if hotstart is None else True,
+                        'linid': True, 
+                        'initstyle':2, # read from netcdf when iboundformat=3
+                    }}
+
+                    wwm_bouc = {'bouc':{
+                        'lbcse': True,
+                        'lbinter' : True,
+                        'lbcwa' : False,
+                        'lbcsp' : False,
+                        'linhom' : True,
+                        'lbsp1d' : False,
+                        'lbsp2d' : False,
+                        'iboundformat':3, 
+                        'fileboudn' : 'wwmbnd.gr3',
+                        'filewave' : 'bndfiles.dat'
+                    }}
+
+
 
                 self.wwm_param = WWM_Param(
                     template=wwm_param_template,
@@ -507,7 +549,7 @@ class ModelDriver:
                 self.outdir / param, overwrite, use_template=use_param_template
             )
 
-        if (self.config.waves is not None) and (wwm_param is not False):
+        if (self.config.waves is not None) or (wwm_param is not False):
             wwm_param = "wwminput.nml" if wwm_param is True else param
             self.wwm_param.write(
                 filename=self.outdir / wwm_param, force=True if overwrite else False, sort=False # consider re-defining .write method so it is like Param.write()
@@ -531,7 +573,7 @@ class ModelDriver:
         obj_write(salt_ic, self.salt_ic, "salt.ic", overwrite)
         obj_write(elev_ic, self.elev_ic, "elev.ic", overwrite)
         obj_write(stations, self.stations, "station.in", overwrite)
-        if (self.config.waves is not None) and (wwm_param is not False):
+        if (self.config.waves is not None):
             os.symlink(self.outdir / 'hgrid.gr3',self.outdir / 'hgrid_WWM.gr3', False)
             obj_write(wwmbnd, self.config.wwmbnd, "wwmbnd.gr3", overwrite)
 
@@ -703,10 +745,10 @@ class ModelConfig(metaclass=ModelConfigMeta):
         self.wwmhgrid = wwmhgrid
         if wwmbnd is not None:
             self.wwmbnd =  wwmbnd
-        elif (wwmbnd is None) and (self.waves is not None):
+        elif (wwmbnd is None) or (self.waves is not None):
             self.wwnbd = self.set_wwmbnd()
 
-    def set_wwmbnd(self):
+    def set_wwmbnd(self,open_boundary_value: int=2):
         """Define wwmbnd.gr3 
         land value = 1
         island value = -1
@@ -732,7 +774,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
                 wwmbnd['nodes'][f'{node_id}'] = (wwmbnd['nodes'][f'{node_id}'][0], flag)
 
         # set open boundary flag
-        flag = int(2) # Dirichlet BC
+        flag = int(open_boundary_value) # Dirichlet BC
         # flag = int(3)   # Neumann BC -- this did not apply any BC for IBOUNDFORMAT == 3 in wwminput.nml
         for i in range(len(self.hgrid.boundaries.open)):
             bound_gdf = self.hgrid.boundaries.open.iloc[i]
@@ -961,6 +1003,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
                 source_sink=self.source_sink,
                 waves=self.waves,
                 ocean=self.ocean,
+                bctides_flags=self.flags
             )
 
         return self._forcings

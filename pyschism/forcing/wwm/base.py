@@ -48,10 +48,88 @@ class WWM(ModelForcing):
         """Abstract property for wave dataset type."""
         pass
 
+class WWM_IBOUNDFORMAT_1(WWM):
+    """
+    Parametric Wave Spectra at Boundary (LBCWA=T and LINHOM=F)
 
-class Parametric_Wave_Dataset(WWM):
+    WBHS           = 0.                 ! Hs at the boundary for parametric spectra
+    WBSS           = 2.                 ! 1 or -1: Pierson-Moskowitz, 2 or -2: JONSWAP, 3 or -3: all in one BIN,
+                                        ! 4: Gauss. The sign decides whether WBTP below is peak (+) or mean period (-)
+    WBTP           = 8.                 ! Tp at the boundary (sec); mean or peak depending on the sign of WBSS
+    WBDM           = 90.0               ! Avg. Wave Direction at the boundary
+    WBDSMS         = 1.                 ! Directional spreading value in degrees (1) or as exponent (2)
+    WBDS           = 20.                 ! Directioanl spreading at the boundary (degrees/exponent)
+    WBGAUSS        = 0.1                ! factor for gaussian distribution if WBSS=1
+    WBPKEN         = 3.3                ! Peak enhancement factor for Jonswap Spectra if WBSS=2 
+    """
+    def __init__(
+            self, 
+            WBHS: float = 0 ,
+            WBSS: float = 2 ,
+            WBTP: float = 8 , 
+            WBDM: float = 0 ,
+            WBDSMS: float = 1 ,
+            WBDS: float = 20,
+            WBGAUSS: float = 0.1,
+            WBPKEN: float = 3.3
+        ):
+            super().__init__()  # Initialize the waves base class
+            self.LBCWA = True
+            self.LINHOM = False
+            self.WBHS = WBHS
+            self.WBSS = WBSS
+            self.WBTP = WBTP
+            self.WBDM = WBDM
+            self.WBDSMS = WBDSMS
+            self.WBDS = WBDS
+            self.WBGAUSS = WBGAUSS
+            self.WBPKEN = WBPKEN
+
+    def write(self):
+        """
+        Implements the required write method.
+        """
+        
+    def write(self):
+        """
+        Create a dictionary representing the wave boundary conditions
+        in IBOUNDFORMAT=1 format with parametric wave spectra.
+        """
+
+        wwm_bouc = {
+            'bouc': {
+                'lbcse': False,     
+                'lbinter': False,  
+                'lbcwa': self.LBCWA, 
+                'lbcsp': False,      
+                'linhom': self.LINHOM, 
+                'LBSP1D': False,
+                'LBSP2D': False,
+                'filebound': 'wwmbnd.gr3',  
+                'iboundformat': 1,   
+                'WBHS': self.WBHS,
+                'WBSS': self.WBSS,
+                'WBTP': self.WBTP,
+                'WBDM': self.WBDM,
+                'WBDSMS': self.WBDSMS,
+                'WBDS': self.WBDS,
+                'WBGAUSS': self.WBGAUSS,
+                'WBPKEN': self.WBPKEN,
+            }
+        }
+        
+        return wwm_bouc
+    
+    @property
+    def dtype(self):
+        return "WWM_IBOUNDFORMAT_1"
+
+class WWM_IBOUNDFORMAT_3(WWM):
     """
     Subclass implementing waves from parmeteric spectral statistics
+    
+    WWM IBOUNDFORMAT 3
+    
     """
     def __init__(
         self, 
@@ -74,7 +152,7 @@ class Parametric_Wave_Dataset(WWM):
 
     @property
     def dtype(self):
-        return "Parametric_Wave_Dataset"
+        return "WWM_IBOUNDFORMAT_3"
 
     def write(
             self, 

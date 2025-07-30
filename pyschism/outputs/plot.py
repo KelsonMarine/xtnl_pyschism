@@ -20,7 +20,7 @@ class PlotOutputCombined:
             self.animation(
                 variable,
                 # show=True,
-                save='/home/jreniel/pyschism/examples/example_1/test.gif',
+                save='test.gif',
                 vmin=0,
                 vmax=3,
                 # start_frame=200,
@@ -75,7 +75,8 @@ class PlotOutputCombined:
         ymax = np.max(y) if ymax is None else ymax
         vmin = np.min(self.nc[variable]) if vmin is None else vmin
         vmax = np.max(self.nc[variable]) if vmax is None else vmax
-        unit = OutputVariableUnit[OutputVariableShortName(variable).name].value
+        # unit = OutputVariableUnit[OutputVariableShortName(variable).name].value
+        unit = ''
 
         def animate(index):
             _ax = fig.get_axes()

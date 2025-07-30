@@ -9,27 +9,28 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from pyschism.forcing.wwm.base import WWM, Parametric_Wave_Dataset, Directional_Spectra_Wave_Dataset
+from pyschism.forcing.wwm.base import WWM, WWM_IBOUNDFORMAT_3
 import pyschism.forcing.wwm as wwm 
 from typing import Union, Literal
-class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
+class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
 
     """
     Subset Copernicus Marine Wave Reanalysis Data: GLOBAL_MULTIYEAR_WAV_001_032
+    https://doi.org/10.48670/moi-00022
     """
 
     def __init__(
         self,
-        ds: Parametric_Wave_Dataset = None,
-        dataset_id: Literal['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H'] =  'cmems_mod_glo_wav_myint_0.2deg_PT3H',
+        ds: WWM_IBOUNDFORMAT_3 = None,
         username: str = None,
         password: str = None,
         filepath: Union[pathlib.Path,str]  = None,
-        iboundformat = 3 # [3 or 6]
+        iboundformat = 3 
     ):
     
-        """Loads Parametric_Wave_Dataset to use as waves input."""
-        self.dataset_id = dataset_id
+        """Loads WWM_IBOUNDFORMAT_3 to use as waves input."""
+        self.dataset_id = ['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H']
+
         self.filewave = 'bndfiles.dat'
         if ds is not None:
             self.ds = ds
@@ -76,9 +77,9 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
   
     def describe(self):
         #'GLOBAL_MULTIYEAR_WAV_001_032'
-        # dataset_id = 'cmems_mod_glo_wav_my_0.2deg_PT3H-i' # 15/01/1980 to 30/04/2023
+        # dataset_id = 'cmems_mod_glo_wav_my_0.2deg_PT3H-i' # 15/01/1980 to 30/04/2023 ... likely to change
         # dataset_id = 'cmems_mod_glo_wav_myint_0.2deg_PT3H'  # interim period, 01/05/2023 to present (month - 1)
-        dataset_describe = copernicusmarine.describe(contains=[self.dataset_id])
+        dataset_describe = copernicusmarine.describe(contains=[self.dataset_id[0]])
         description=dataset_describe.model_dump()
         return description
     
@@ -115,31 +116,58 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
             max_lat=bbox.ymax
             
             assert isinstance(outdir, pathlib.Path), "outdir must be a pathlib.Path object"
-
-            filename = (
-                f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
-                f"_N={min_lat:1.2f}_{max_lat:1.2f}"
-                f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
-            )
-            copernicusmarine_subset_filename = outdir / filename        
-            if not copernicusmarine_subset_filename.is_file():
-                # --- Subset dataset
-                copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
-                copernicusmarine.subset(
-                    dataset_id=self.dataset_id,
-                    variables=variables.keys(),
-                    minimum_longitude=min_lon,
-                    minimum_latitude=min_lat,
-                    maximum_longitude=max_lon,
-                    maximum_latitude=max_lat,
-                    coordinates_selection_method='inside',
-                    start_datetime=start_datetime, 
-                    end_datetime=end_datetime,
-                    output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
-                    overwrite=overwrite
-                    # output_directory = "./-" # default is current directory
-                    )
+            try:
+                filename = (
+                    f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+                    f"_N={min_lat:1.2f}_{max_lat:1.2f}"
+                    f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
+                )
+                copernicusmarine_subset_filename = outdir / filename        
+                if not copernicusmarine_subset_filename.is_file():
+                    # --- Subset dataset
+                    copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                    copernicusmarine.subset(
+                        dataset_id='cmems_mod_glo_wav_my_0.2deg_PT3H-i',
+                        variables=variables.keys(),
+                        minimum_longitude=min_lon,
+                        minimum_latitude=min_lat,
+                        maximum_longitude=max_lon,
+                        maximum_latitude=max_lat,
+                        coordinates_selection_method='inside',
+                        start_datetime=start_datetime, 
+                        end_datetime=end_datetime,
+                        output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                        overwrite=overwrite
+                        # output_directory = "./-" # default is current directory
+                        )
+            except: 
+                print('subsetting iterim product ... ')
+                filename = (
+                    f"cmems_mod_glo_wav_myint_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+                    f"_N={min_lat:1.2f}_{max_lat:1.2f}"
+                    f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
+                )
+                copernicusmarine_subset_filename = outdir / filename        
+                if not copernicusmarine_subset_filename.is_file():
+                    # --- Subset dataset
+                    copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                    copernicusmarine.subset(
+                        dataset_id='cmems_mod_glo_wav_myint_0.2deg_PT3H-i',
+                        variables=variables.keys(),
+                        minimum_longitude=min_lon,
+                        minimum_latitude=min_lat,
+                        maximum_longitude=max_lon,
+                        maximum_latitude=max_lat,
+                        coordinates_selection_method='inside',
+                        start_datetime=start_datetime, 
+                        end_datetime=end_datetime,
+                        output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                        overwrite=overwrite
+                        # output_directory = "./-" # default is current directory
+                        )                
         elif self.iboundformat == 6:
+
+            raise('not implemented yet')
 
             if stations:
 
@@ -186,7 +214,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
                 # for (lon,lat) in zip(lons,lats):
                     # fname = outdir / 'tmp' / f"{self.dataset_id}_{lon}_{lat}.nc"
                 copernicusmarine.subset(
-                    dataset_id=self.dataset_id,
+                    dataset_id='cmems_mod_glo_wav_my_0.2deg_PT3H-i',
                     variables=variables.keys(),
                     minimum_longitude=min_lon,
                     minimum_latitude=min_lat,
@@ -282,9 +310,12 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
             # Drop tp (not needed for WWM)
             ds = ds.drop_vars("tp")
 
-            self.Parametric_Wave_Dataset = Parametric_Wave_Dataset(ds=ds)
+            self.WWM_IBOUNDFORMAT_3 = WWM_IBOUNDFORMAT_3(ds=ds)
 
         elif self.iboundformat == 6:
+
+            raise('not implemented yet')
+
         # netcdf DUCK94_wave_spectra_8m_array {
         # dimensions:
         #         station = 1 ;
@@ -345,295 +376,295 @@ class GLOBAL_MULTIYEAR_WAV_001_032(Parametric_Wave_Dataset):
         
         self.format_GLOBAL_MULTIYEAR_WAV_001_032(copernicusmarine_subset_filename)
 
-        self.Parametric_Wave_Dataset.write(outdir=outdir,overwrite=overwrite)
+        self.WWM_IBOUNDFORMAT_3.write(outdir=outdir,overwrite=overwrite)
         
-class GLOBAL_MULTIYEAR_WAV_001_032_Directional(Directional_Spectra_Wave_Dataset):
+# class GLOBAL_MULTIYEAR_WAV_001_032_Directional(WWM_IBOUNDFORMAT_6):
 
-    """
-    Subset Copernicus Marine Wave Reanalysis Dataset: GLOBAL_MULTIYEAR_WAV_001_032
+#     """
+#     Subset Copernicus Marine Wave Reanalysis Dataset: GLOBAL_MULTIYEAR_WAV_001_032
 
-    Construct model directional spectra from partitioned spectral data: 
+#     Construct model directional spectra from partitioned spectral data: 
 
-        Sea surface primary swell wave significant height :  VHM0_SW1 [m]
+#         Sea surface primary swell wave significant height :  VHM0_SW1 [m]
 
-        Sea surface secondary swell wave significant height :  VHM0_SW2 [m]
+#         Sea surface secondary swell wave significant height :  VHM0_SW2 [m]
 
-        Sea surface wind wave significant height :  VHM0_WW [m]
+#         Sea surface wind wave significant height :  VHM0_WW [m]
 
-        Sea surface primary swell wave from direction :  VMDR_SW1 [°]
+#         Sea surface primary swell wave from direction :  VMDR_SW1 [°]
 
-        Sea surface secondary swell wave from direction :  VMDR_SW2 [°]
+#         Sea surface secondary swell wave from direction :  VMDR_SW2 [°]
 
-        Sea surface wind wave from direction :  VMDR_WW [°]
+#         Sea surface wind wave from direction :  VMDR_WW [°]
 
-        Sea surface primary swell wave mean period :  VTM01_SW1 [s]
+#         Sea surface primary swell wave mean period :  VTM01_SW1 [s]
 
-        Sea surface secondary swell wave mean period :  VTM01_SW2 [s]
+#         Sea surface secondary swell wave mean period :  VTM01_SW2 [s]
 
-        Sea surface wind wave mean period :  VTM01_WW [s]
+#         Sea surface wind wave mean period :  VTM01_WW [s]
 
-        Sea surface wave mean period from variance spectral density second frequency moment :  VTM02 [s]
+#         Sea surface wave mean period from variance spectral density second frequency moment :  VTM02 [s]
 
-        Sea surface wave mean period from variance spectral density inverse frequency moment :  VTM10 [s]
+#         Sea surface wave mean period from variance spectral density inverse frequency moment :  VTM10 [s]
 
-    """
+#     """
 
-    def __init__(
-        self,
-        dswd: Directional_Spectra_Wave_Dataset = None,
-        dataset_id: Literal['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H'] =  'cmems_mod_glo_wav_myint_0.2deg_PT3H',
-        username: str = None,
-        password: str = None
-    ):
+#     def __init__(
+#         self,
+#         dswd: Directional_Spectra_Wave_Dataset = None,
+#         dataset_id: Literal['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H'] =  'cmems_mod_glo_wav_myint_0.2deg_PT3H',
+#         username: str = None,
+#         password: str = None
+#     ):
     
-        """Access GLOBAL_MULTIYEAR_WAV_001_032 data to use as waves input."""
-        self.dataset_id = dataset_id
-        self.filewave = 'bndfiles.dat'
-        if dswd is not None:
-            self.dswd = dswd
-        else:
-            if username is not None and password is not None:            
-                copernicusmarine.login(username=username,password=password,force_overwrite=True)
+#         """Access GLOBAL_MULTIYEAR_WAV_001_032 data to use as waves input."""
+#         self.dataset_id = dataset_id
+#         self.filewave = 'bndfiles.dat'
+#         if dswd is not None:
+#             self.dswd = dswd
+#         else:
+#             if username is not None and password is not None:            
+#                 copernicusmarine.login(username=username,password=password,force_overwrite=True)
            
 
-    def describe(self):
-        #'GLOBAL_MULTIYEAR_WAV_001_032'
-        # dataset_id = 'cmems_mod_glo_wav_my_0.2deg_PT3H-i' # 15/01/1980 to 30/04/2023
-        # dataset_id = 'cmems_mod_glo_wav_myint_0.2deg_PT3H'  # interim period, 01/05/2023 to present (month - 1)
-        dataset_describe = copernicusmarine.describe(contains=[self.dataset_id])
-        description=dataset_describe.model_dump()
-        return description
+#     def describe(self):
+#         #'GLOBAL_MULTIYEAR_WAV_001_032'
+#         # dataset_id = 'cmems_mod_glo_wav_my_0.2deg_PT3H-i' # 15/01/1980 to 30/04/2023
+#         # dataset_id = 'cmems_mod_glo_wav_myint_0.2deg_PT3H'  # interim period, 01/05/2023 to present (month - 1)
+#         dataset_describe = copernicusmarine.describe(contains=[self.dataset_id])
+#         description=dataset_describe.model_dump()
+#         return description
 
-    def write(
-        self,
-        outdir: Union[str, os.PathLike],
-        start_datetime: datetime = None,
-        rnday: Union[float, int, timedelta] = None,
-        end_datetime: datetime = None,
-        bbox: Union[list, tuple] = None,
-        overwrite: bool = True, # TODO: add error catching here (always overwrites!)
-        # cleanup: bool = True
-    ):
+#     def write(
+#         self,
+#         outdir: Union[str, os.PathLike],
+#         start_datetime: datetime = None,
+#         rnday: Union[float, int, timedelta] = None,
+#         end_datetime: datetime = None,
+#         bbox: Union[list, tuple] = None,
+#         overwrite: bool = True, # TODO: add error catching here (always overwrites!)
+#         # cleanup: bool = True
+#     ):
         
-        """Estimate directional sectra from partioned spectral statistics"""
+#         """Estimate directional sectra from partioned spectral statistics"""
         
-        if end_datetime is None:
-            if not isinstance(rnday,timedelta):
-                rnday = timedelta(days=rnday)
-            end_datetime = start_datetime + rnday
+#         if end_datetime is None:
+#             if not isinstance(rnday,timedelta):
+#                 rnday = timedelta(days=rnday)
+#             end_datetime = start_datetime + rnday
         
-        # define variables
-        variables = {
-            "VHM0_SW1": "sea_surface_primary_swell_wave_significant_height",
-            "VHM0_SW2": "sea_surface_secondary_swell_wave_significant_height",
-            "VHM0_WW": "sea_surface_wind_wave_significant_height",
-            "VMDR_SW1": "sea_surface_primary_swell_wave_from_direction",
-            "VMDR_SW2": "sea_surface_secondary_swell_wave_from_direction",
-            "VMDR_WW": "sea_surface_wind_wave_from_direction",
-            "VTM01_SW1": "sea_surface_primary_swell_wave_mean_period",
-            "VTM01_SW2": "sea_surface_secondary_swell_wave_mean_period",
-            "VTM01_WW": "sea_surface_wind_wave_mean_period",
-        }
+#         # define variables
+#         variables = {
+#             "VHM0_SW1": "sea_surface_primary_swell_wave_significant_height",
+#             "VHM0_SW2": "sea_surface_secondary_swell_wave_significant_height",
+#             "VHM0_WW": "sea_surface_wind_wave_significant_height",
+#             "VMDR_SW1": "sea_surface_primary_swell_wave_from_direction",
+#             "VMDR_SW2": "sea_surface_secondary_swell_wave_from_direction",
+#             "VMDR_WW": "sea_surface_wind_wave_from_direction",
+#             "VTM01_SW1": "sea_surface_primary_swell_wave_mean_period",
+#             "VTM01_SW2": "sea_surface_secondary_swell_wave_mean_period",
+#             "VTM01_WW": "sea_surface_wind_wave_mean_period",
+#         }
 
-        outdir = pathlib.Path(outdir)
-        outdir.mkdir(exist_ok=True)
+#         outdir = pathlib.Path(outdir)
+#         outdir.mkdir(exist_ok=True)
 
-        # lonlat_bbox=hgrid.bbox.bounds
-        lonlat_bbox=bbox
-        min_lon=lonlat_bbox[0]
-        min_lat=lonlat_bbox[1]
-        max_lon=lonlat_bbox[0] + lonlat_bbox[2]
-        max_lat=lonlat_bbox[1] + lonlat_bbox[3]
+#         # lonlat_bbox=hgrid.bbox.bounds
+#         lonlat_bbox=bbox
+#         min_lon=lonlat_bbox[0]
+#         min_lat=lonlat_bbox[1]
+#         max_lon=lonlat_bbox[0] + lonlat_bbox[2]
+#         max_lat=lonlat_bbox[1] + lonlat_bbox[3]
 
-        # --- Subset dataset
-        output_tmp_filename = outdir / f"{self.dataset_id}_subset_tmp.nc"
-        copernicusmarine.subset(
-            dataset_id=self.dataset_id,
-            variables=variables.keys(),
-            min_lon=min_lon,
-            min_lat=min_lat,
-            max_lon=max_lon,
-            max_lat=max_lat,
-            start_datetime=start_datetime,
-            end_datetime=end_datetime,
-            output_filename = output_tmp_filename, # if extension is .zarr, file is downloaded in Zarr format 
-            # output_directory = "./-" # default is current directory
-            )
+#         # --- Subset dataset
+#         output_tmp_filename = outdir / f"{self.dataset_id}_subset_tmp.nc"
+#         copernicusmarine.subset(
+#             dataset_id=self.dataset_id,
+#             variables=variables.keys(),
+#             min_lon=min_lon,
+#             min_lat=min_lat,
+#             max_lon=max_lon,
+#             max_lat=max_lat,
+#             start_datetime=start_datetime,
+#             end_datetime=end_datetime,
+#             output_filename = output_tmp_filename, # if extension is .zarr, file is downloaded in Zarr format 
+#             # output_directory = "./-" # default is current directory
+#             )
 
-        # --- construct etfh estimate
+#         # --- construct etfh estimate
 
-        ds = xr.open_dataset(output_tmp_filename)
+#         ds = xr.open_dataset(output_tmp_filename)
 
-        self.construct_etfh()
+#         self.construct_etfh()
 
-        print(self.etfh)
+#         print(self.etfh)
 
-        # --- write NetCDF file 
-        filepath = outdir / self.filewave
-        if filepath.exists():
-            if overwrite:
-                os.remove(filepath)
-            else:
-                raise FileExistsError(f"File '{filepath}' already exists and overwrite is False.")
+#         # --- write NetCDF file 
+#         filepath = outdir / self.filewave
+#         if filepath.exists():
+#             if overwrite:
+#                 os.remove(filepath)
+#             else:
+#                 raise FileExistsError(f"File '{filepath}' already exists and overwrite is False.")
 
-        # set encoding for WWM
-        for var in ["time","longitude","latitude","dir","freq","etfh"]:
-            self.etfh[var].encoding["dtype"]="float64"
-            self.etfh[var].encoding["_FillValue"]=-9999.0
-            self.etfh[var].encoding["scale_factor"]=1.0
-            self.etfh[var].encoding["zlib"]=True
-            self.etfh[var].encoding["complevel"]=4
+#         # set encoding for WWM
+#         for var in ["time","longitude","latitude","dir","freq","etfh"]:
+#             self.etfh[var].encoding["dtype"]="float64"
+#             self.etfh[var].encoding["_FillValue"]=-9999.0
+#             self.etfh[var].encoding["scale_factor"]=1.0
+#             self.etfh[var].encoding["zlib"]=True
+#             self.etfh[var].encoding["complevel"]=4
 
-        # Define encoding for coordinates
-        encoding = {
-            "longitude": {"dtype": "float64",'scale_factor': 1.},
-            "latitude": {"dtype": "float64",'scale_factor': 1.},
-            "time": {"dtype": "float64",'scale_factor': 1.},
-        }
+#         # Define encoding for coordinates
+#         encoding = {
+#             "longitude": {"dtype": "float64",'scale_factor': 1.},
+#             "latitude": {"dtype": "float64",'scale_factor': 1.},
+#             "time": {"dtype": "float64",'scale_factor': 1.},
+#         }
 
-        # write to netcdf
-        self.etfh.to_netcdf(
-            outdir / 'ww3_efth.nc',
-            unlimited_dims=['time'],
-            encoding=encoding,  # Ensures time, lon, lat are double
-            )
+#         # write to netcdf
+#         self.etfh.to_netcdf(
+#             outdir / 'ww3_efth.nc',
+#             unlimited_dims=['time'],
+#             encoding=encoding,  # Ensures time, lon, lat are double
+#             )
 
-        # with open(outdir / self.filewave, "w") as f:
-            # for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
-            #     filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
-            #     f.write(filename + "\n") 
-            #     print("")
-            #     print(outdir / filename)    
-            #     print(ds[var])   
-            #     print("")
+#         # with open(outdir / self.filewave, "w") as f:
+#             # for var in ['dir','fp','hs','spr','t02']: # order of variables matters (or so people claim?)
+#             #     filename = f"ww3_{var}.nc".strip()  # Ensure filename is clean.
+#             #     f.write(filename + "\n") 
+#             #     print("")
+#             #     print(outdir / filename)    
+#             #     print(ds[var])   
+#             #     print("")
 
-            #     # extract variable
-            #     ds_var = ds[var]
+#             #     # extract variable
+#             #     ds_var = ds[var]
 
-            #     # apply valid min and valid max
-            #     valid_min = ds_var.attrs.get("valid_min", -np.inf)  # Default -inf if missing
-            #     valid_max = ds_var.attrs.get("valid_max", np.inf)  # Default +inf if missing          
-            #     ds_var = ds_var.where((ds_var >= valid_min) & (ds_var <= valid_max), np.nan) # Mask values outside valid range
+#             #     # apply valid min and valid max
+#             #     valid_min = ds_var.attrs.get("valid_min", -np.inf)  # Default -inf if missing
+#             #     valid_max = ds_var.attrs.get("valid_max", np.inf)  # Default +inf if missing          
+#             #     ds_var = ds_var.where((ds_var >= valid_min) & (ds_var <= valid_max), np.nan) # Mask values outside valid range
 
-            #     # transpose to expected dimension order from wwm
-            #     # ds_var = ds_var.transpose("longitude", "latitude", "time")
-            #     ds_var = ds_var.transpose("time", "latitude","longitude") # this is the format given with examples of: ncdump -h ww3_hs.nc 
+#             #     # transpose to expected dimension order from wwm
+#             #     # ds_var = ds_var.transpose("longitude", "latitude", "time")
+#             #     ds_var = ds_var.transpose("time", "latitude","longitude") # this is the format given with examples of: ncdump -h ww3_hs.nc 
 
-            #     # set encoding for WWM
-            #     ds_var.encoding["dtype"]="float64"
-            #     ds_var.encoding["_FillValue"]=-9999.0
-            #     ds_var.encoding["scale_factor"]=1.0
+#             #     # set encoding for WWM
+#             #     ds_var.encoding["dtype"]="float64"
+#             #     ds_var.encoding["_FillValue"]=-9999.0
+#             #     ds_var.encoding["scale_factor"]=1.0
 
-            #     # compression
-            #     ds_var.encoding["zlib"]=True
-            #     ds_var.encoding["complevel"]=4
+#             #     # compression
+#             #     ds_var.encoding["zlib"]=True
+#             #     ds_var.encoding["complevel"]=4
 
-            #     # Define encoding for coordinates
-            #     encoding = {
-            #         "longitude": {"dtype": "float64",'scale_factor': 1.},
-            #         "latitude": {"dtype": "float64",'scale_factor': 1.},
-            #         "time": {"dtype": "float64",'scale_factor': 1.},
-            #         var: ds_var.encoding  # Include variable-specific encoding
-            #     }
+#             #     # Define encoding for coordinates
+#             #     encoding = {
+#             #         "longitude": {"dtype": "float64",'scale_factor': 1.},
+#             #         "latitude": {"dtype": "float64",'scale_factor': 1.},
+#             #         "time": {"dtype": "float64",'scale_factor': 1.},
+#             #         var: ds_var.encoding  # Include variable-specific encoding
+#             #     }
 
-            #     print(ds_var.encoding)
+#             #     print(ds_var.encoding)
 
-            #     # write to netcdf
-            #     ds_var.to_netcdf(
-            #         outdir / filename,
-            #         unlimited_dims=['time'],
-            #         encoding=encoding,  # Ensures time, lon, lat are double
-            #         )
+#             #     # write to netcdf
+#             #     ds_var.to_netcdf(
+#             #         outdir / filename,
+#             #         unlimited_dims=['time'],
+#             #         encoding=encoding,  # Ensures time, lon, lat are double
+#             #         )
 
-            # # Close datasets.
-            # ds.close()
+#             # # Close datasets.
+#             # ds.close()
 
-            # # Delete subset dataset 
-            # subprocess.run(['rm','-rf',f'{output_tmp_filename}'])
+#             # # Delete subset dataset 
+#             # subprocess.run(['rm','-rf',f'{output_tmp_filename}'])
 
-    def construct_etfh(
-            self, 
-            freq: Union[list,np.array]=np.logspace(0.04,1,num=24), 
-            direction: Union[list,np.array] = np.arange(0,360,10), 
-            gamma:  Union[list,np.array] = None
-            ):
-        """
-        Reconstruct total directional wave spectra from partitioned wave statistics.
+#     def construct_etfh(
+#             self, 
+#             freq: Union[list,np.array]=np.logspace(0.04,1,num=24), 
+#             direction: Union[list,np.array] = np.arange(0,360,10), 
+#             gamma:  Union[list,np.array] = None
+#             ):
+#         """
+#         Reconstruct total directional wave spectra from partitioned wave statistics.
 
-        Parameters:
-            freq : Frequencies in Hz (default: logspace from ~1.096 mHz to 10 Hz)
-            direction : Directions in degrees (default: 0 to 350 every 10°)
+#         Parameters:
+#             freq : Frequencies in Hz (default: logspace from ~1.096 mHz to 10 Hz)
+#             direction : Directions in degrees (default: 0 to 350 every 10°)
 
-        Returns:
-            ds_etfh : xarray.Dataset with reconstructed total directional spectra
-        """
+#         Returns:
+#             ds_etfh : xarray.Dataset with reconstructed total directional spectra
+#         """
 
-        # # "VHM0_SW1": "sea_surface_primary_swell_wave_significant_height",
-        # # "VMDR_SW1": "sea_surface_primary_swell_wave_from_direction",
-        # # "VTM01_SW1": "sea_surface_primary_swell_wave_mean_period",
+#         # # "VHM0_SW1": "sea_surface_primary_swell_wave_significant_height",
+#         # # "VMDR_SW1": "sea_surface_primary_swell_wave_from_direction",
+#         # # "VTM01_SW1": "sea_surface_primary_swell_wave_mean_period",
     
-        # # "VHM0_SW2": "sea_surface_secondary_swell_wave_significant_height",
-        # # "VMDR_SW2": "sea_surface_secondary_swell_wave_from_direction",
-        # # "VTM01_SW2": "sea_surface_secondary_swell_wave_mean_period",
+#         # # "VHM0_SW2": "sea_surface_secondary_swell_wave_significant_height",
+#         # # "VMDR_SW2": "sea_surface_secondary_swell_wave_from_direction",
+#         # # "VTM01_SW2": "sea_surface_secondary_swell_wave_mean_period",
 
-        # # "VHM0_WW": "sea_surface_wind_wave_significant_height",
-        # # "VMDR_WW": "sea_surface_wind_wave_from_direction",
-        # # "VTM01_WW": "sea_surface_wind_wave_mean_period",
+#         # # "VHM0_WW": "sea_surface_wind_wave_significant_height",
+#         # # "VMDR_WW": "sea_surface_wind_wave_from_direction",
+#         # # "VTM01_WW": "sea_surface_wind_wave_mean_period",
 
 
-        efth_list = []
+#         efth_list = []
 
-        for suffix in ['SW1', 'SW2', 'WW']:
-            hs_key = f'VHM0_{suffix}'
-            dm_key = f'VMDR_{suffix}'
-            ta_key = f'VTM01_{suffix}'
+#         for suffix in ['SW1', 'SW2', 'WW']:
+#             hs_key = f'VHM0_{suffix}'
+#             dm_key = f'VMDR_{suffix}'
+#             ta_key = f'VTM01_{suffix}'
 
-            if all(k in self.ds for k in [hs_key, dm_key, ta_key]):
+#             if all(k in self.ds for k in [hs_key, dm_key, ta_key]):
 
-                ta = self.ds[ta_key].values
-                hs = self.ds[hs_key].values
-                dm = self.ds[dm_key].values
+#                 ta = self.ds[ta_key].values
+#                 hs = self.ds[hs_key].values
+#                 dm = self.ds[dm_key].values
 
-                if gamma is None:
-                    tp, gamma = wwm.base.solve_Tp_gamma_from_T1_Hs_DNV(Tm01=ta,Hs=hs)
-                else:
-                    tp = wwm.base.get_wave_Tp_from_Ta_DNV(waveTa=ta, gamma=gamma)
+#                 if gamma is None:
+#                     tp, gamma = wwm.base.solve_Tp_gamma_from_T1_Hs_DNV(Tm01=ta,Hs=hs)
+#                 else:
+#                     tp = wwm.base.get_wave_Tp_from_Ta_DNV(waveTa=ta, gamma=gamma)
 
-                dspr = wwm.base.get_wave_spr_DNV(waveTp=tp)
-                gth = wavespectra.construct.cartwright(dir=direction, dm=dm, dspr=dspr, under_90=True)
-                ef = wavespectra.construct.jonswap(freq=freq, fp=1 / tp, gamma=gamma, hs=hs)
-                efth = ef * gth
-                efth = efth.fillna(0.0)
+#                 dspr = wwm.base.get_wave_spr_DNV(waveTp=tp)
+#                 gth = wavespectra.construct.cartwright(dir=direction, dm=dm, dspr=dspr, under_90=True)
+#                 ef = wavespectra.construct.jonswap(freq=freq, fp=1 / tp, gamma=gamma, hs=hs)
+#                 efth = ef * gth
+#                 efth = efth.fillna(0.0)
 
-        # Stack all partitions along a new 'partition' dimension
-        efth_concat = xr.concat(efth_list, dim="partition")
+#         # Stack all partitions along a new 'partition' dimension
+#         efth_concat = xr.concat(efth_list, dim="partition")
 
-        # Sum over partition dimension to get total energy spectrum
-        efth_total = efth_concat.sum(dim="partition")
+#         # Sum over partition dimension to get total energy spectrum
+#         efth_total = efth_concat.sum(dim="partition")
 
-        self.efth = efth_total
+#         self.efth = efth_total
 
-        # # estimate unknown parameters
-        # gamma = 3.3
-        # tp = get_wave_Tp_from_Ta_DNV(waveTa=self.ds['VTM01_SW1'].values, gamma = gamma) 
-        # dspr = get_wave_spr_DNV(waveTp = tp)
-        # gth = wavespectra.construct.direction.cartwright(dir=dir, dm=self.ds['VMDR_SW1'].values, dspr=dspr, under_90=True)
-        # ef = wavespectra.construct.jonswap(freq=freq, fp=1/tp, gamma=gamma, hs= self.ds.VHM0_SW1.values)
-        # efth1 = ef * gth
-        # efth1.fillna(0.0)
+#         # # estimate unknown parameters
+#         # gamma = 3.3
+#         # tp = get_wave_Tp_from_Ta_DNV(waveTa=self.ds['VTM01_SW1'].values, gamma = gamma) 
+#         # dspr = get_wave_spr_DNV(waveTp = tp)
+#         # gth = wavespectra.construct.direction.cartwright(dir=dir, dm=self.ds['VMDR_SW1'].values, dspr=dspr, under_90=True)
+#         # ef = wavespectra.construct.jonswap(freq=freq, fp=1/tp, gamma=gamma, hs= self.ds.VHM0_SW1.values)
+#         # efth1 = ef * gth
+#         # efth1.fillna(0.0)
 
     
-    @property
-    def _dir(self):
-        """Wave direction coordinate in coming-from convention, degree"""
-        return self.etfh.dir.values
+#     @property
+#     def _dir(self):
+#         """Wave direction coordinate in coming-from convention, degree"""
+#         return self.etfh.dir.values
 
-    @property
-    def _freq(self):
-        """Wave frequency coordinate, Hz"""
-        return self.etfh.freq.values
+#     @property
+#     def _freq(self):
+#         """Wave frequency coordinate, Hz"""
+#         return self.etfh.freq.values
     
-    @property
-    def _etfh(self):
-        "Wave 2D spectra, m^2 / degree s"
-        return self.etfh.etfh.values
+#     @property
+#     def _etfh(self):
+#         "Wave 2D spectra, m^2 / degree s"
+#         return self.etfh.etfh.values

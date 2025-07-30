@@ -24,135 +24,215 @@ from pyschism.forcing.nws.nws2.sflux import (
 
 logger = logging.getLogger(__name__)
 
+# class ERA5DataInventory:
+
+#     def __init__(self, start_date=None, rnday: Union[float, timedelta] = 4, bbox=None, tmpdir=None):
+
+#         self.start_date = start_date
+#         self.rnday = rnday
+#         self.end_date = self.start_date+timedelta(self.rnday + 1)
+#         self.client=cdsapi.Client()
+#         self._bbox = bbox
+#         if tmpdir is not None:
+#             self.tmpdir = tmpdir
+
+#         filename = self.tmpdir / f"era5_{self.start_date.strftime('%Y%m%d')}.zip"
+
+#         if filename.is_file() == False:
+            
+#             start_date = self.start_date
+#             end_date = self.start_date + timedelta(days=1)
+#             while end_date < self.end_date + timedelta(days=1):
+#                 print(f"ERA5DataInventory Downloading: {start_date.strftime('%Y-%m-%d')}")
+
+#                 filename = self.tmpdir /  f"era5_{start_date.strftime('%Y%m%d')}.zip"
+
+#                 r = self.client.retrieve(
+#                     'reanalysis-era5-single-levels',
+#                     {
+#                     'variable':[
+#                         '10m_u_component_of_wind','10m_v_component_of_wind','mean_sea_level_pressure',
+#                         '2m_dewpoint_temperature','2m_temperature','mean_total_precipitation_rate',
+#                         'mean_surface_downward_long_wave_radiation_flux','mean_surface_downward_short_wave_radiation_flux'
+#                         ],
+#                     'product_type':'reanalysis',
+#                     'date':f"{start_date.strftime('%Y-%m-%d')}",
+#                     'time':[
+#                         '00:00','01:00','02:00','03:00','04:00','05:00',
+#                         '06:00','07:00','08:00','09:00','10:00','11:00',
+#                         '12:00','13:00','14:00','15:00','16:00','17:00',
+#                         '18:00','19:00','20:00','21:00','22:00','23:00'
+#                         ],
+#                     'area': [self._bbox.ymax+0.5, self._bbox.xmin-0.5, self._bbox.ymin-0.5, self._bbox.xmax+0.5], # North, West, South, East. Default: global
+#                     'format':'netcdf'
+#                     }
+#                 )
+#                 r.download(filename)
+
+#                 #unzip file
+#                 with ZipFile(filename, 'r') as zip_ref:
+#                     zip_ref.extractall(self.tmpdir)
+#                     ds = xr.merge(
+#                             [xr.open_dataset(self.tmpdir / fname)
+#                                 for fname in zip_ref.namelist()]
+#                         ).rename({'avg_tprate': 'mtpr', 'avg_sdlwrf': 'msdwlwrf', 'avg_sdswrf': 'msdwswrf'})
+
+#                     ds.to_netcdf(str(filename).split('.')[0] + '.nc')
+
+#                     [os.remove(self.tmpdir / fname) for fname in zip_ref.namelist()]
+#                 os.remove(filename)
+
+#                 start_date = end_date
+#                 end_date += timedelta(days=1)
+            
+
+#     @property
+#     def tmpdir(self):
+#         if not hasattr(self, '_tmpdir'):
+#             self._tmpdir = tempfile.TemporaryDirectory()
+#         return pathlib.Path(self._tmpdir.name)
+
+#     @tmpdir.setter
+#     def tmpdir(self, value):
+#         self._tmpdir = value
+
+#     @property
+#     def files(self):
+#         return sorted(list(self.tmpdir.glob('**/era5_*.nc')))
+
+#     @property
+#     def lon(self):
+#         if not hasattr(self, '_lon'):
+#             self._lon = Dataset(self.files[0]).variables['longitude'][:]
+#             if not hasattr(self, '_lat'):
+#                 self._lat = Dataset(self.files[0]).variables['latitude'][::-1]
+#         return self._lon
+
+#     @property
+#     def lat(self):
+#         if not hasattr(self, '_lat'):
+#             self._lat = Dataset(self.files[0]).variables['latitude'][::-1]
+#             if not hasattr(self, '_lon'):
+#                 self._lon = Dataset(self.files[0]).variables['longitude'][:]
+#         return self._lat
+
+#     def xy_grid(self):
+#         return np.meshgrid(self.lon, self.lat)
+
+
+import os
+import pathlib
+import tempfile
+from datetime import timedelta
+from typing import Union
+from zipfile import ZipFile
+
+import cdsapi
+import xarray as xr
+import numpy as np
+from netCDF4 import Dataset
+
+
 class ERA5DataInventory:
-
     def __init__(self, start_date=None, rnday: Union[float, timedelta] = 4, bbox=None, tmpdir=None):
-
         self.start_date = start_date
         self.rnday = rnday
-        self.end_date = self.start_date+timedelta(self.rnday + 1)
-        self.client=cdsapi.Client()
+        self.end_date = self.start_date + timedelta(self.rnday + 1)
+        self.client = cdsapi.Client()
         self._bbox = bbox
+
         if tmpdir is not None:
-            self.tmpdir = tmpdir
+            self._tmpdir_path = pathlib.Path(tmpdir)
+            self._tmpdir_obj = None  # No TemporaryDirectory created
+        else:
+            self._tmpdir_obj = tempfile.TemporaryDirectory()
+            self._tmpdir_path = pathlib.Path(self._tmpdir_obj.name)
 
-        filename = self.tmpdir / f"era5_{self.start_date.strftime('%Y%m%d')}.zip"
+        self._download_and_process_data()
 
-        if filename.is_file() == False:
-
-            # FIX ME!! Runs into data limits at large requests
-            # r = self.client.retrieve(
-            #     'reanalysis-era5-single-levels',
-            #     {
-            #     'variable':[
-            #         '10m_u_component_of_wind','10m_v_component_of_wind','mean_sea_level_pressure',
-            #         '2m_dewpoint_temperature','2m_temperature','mean_total_precipitation_rate',
-            #         'mean_surface_downward_long_wave_radiation_flux','mean_surface_downward_short_wave_radiation_flux'
-            #         ],
-            #     'product_type':'reanalysis',
-            #     'date':f"{self.start_date.strftime('%Y-%m-%d')}/{self.end_date.strftime('%Y-%m-%d')}",
-            #     'time':[
-            #         '00:00','01:00','02:00','03:00','04:00','05:00',
-            #         '06:00','07:00','08:00','09:00','10:00','11:00',
-            #         '12:00','13:00','14:00','15:00','16:00','17:00',
-            #         '18:00','19:00','20:00','21:00','22:00','23:00'
-            #         ],
-            #     'area': [self._bbox.ymax+0.5, self._bbox.xmin-0.5, self._bbox.ymin-0.5, self._bbox.xmax+0.5], # North, West, South, East. Default: global
-            #     'format':'netcdf'
-            #     }
-            # )
-
-            # r.download(filename)
-                        #unzip file
-            # with ZipFile(filename, 'r') as zip_ref:
-            #     zip_ref.extractall(self.tmpdir)
-            #     ds = xr.merge(
-            #             [xr.open_dataset(self.tmpdir / fname)
-            #                 for fname in zip_ref.namelist()]
-            #         ).rename({'avg_tprate': 'mtpr', 'avg_sdlwrf': 'msdwlwrf', 'avg_sdswrf': 'msdwswrf'})
-
-            #     ds.to_netcdf(str(filename).split('.')[0] + '.nc')
-
-            #     [os.remove(self.tmpdir / fname) for fname in zip_ref.namelist()]
-            # os.remove(filename)
-            start_date = self.start_date
-            end_date = self.start_date + timedelta(days=1)
-            while end_date < self.end_date + timedelta(days=1):
-                print(f"ERA5DataInventory Downloading: {start_date.strftime('%Y-%m-%d')}")
-
-                filename = self.tmpdir / f"era5_{start_date.strftime('%Y%m%d')}.zip"
-
+    def _download_and_process_data(self):
+        start_date = self.start_date
+        end_date = self.start_date + timedelta(days=1)
+        its = 0
+        while end_date < self.end_date or its == 0:
+            filename = self.tmpdir / f"era5_{start_date.strftime('%Y%m%d')}.zip"
+            print(f"\n{start_date} to {end_date}\n")
+            if not filename.exists():
+                print(f"ERA5DataInventory Downloading: {start_date.strftime('%Y-%m-%d')} to {filename}")
                 r = self.client.retrieve(
                     'reanalysis-era5-single-levels',
                     {
-                    'variable':[
-                        '10m_u_component_of_wind','10m_v_component_of_wind','mean_sea_level_pressure',
-                        '2m_dewpoint_temperature','2m_temperature','mean_total_precipitation_rate',
-                        'mean_surface_downward_long_wave_radiation_flux','mean_surface_downward_short_wave_radiation_flux'
+                        'variable': [
+                            '10m_u_component_of_wind', '10m_v_component_of_wind',
+                            'mean_sea_level_pressure', '2m_dewpoint_temperature',
+                            '2m_temperature', 'mean_total_precipitation_rate',
+                            'mean_surface_downward_long_wave_radiation_flux',
+                            'mean_surface_downward_short_wave_radiation_flux'
                         ],
-                    'product_type':'reanalysis',
-                    'date':f"{start_date.strftime('%Y-%m-%d')}",
-                    'time':[
-                        '00:00','01:00','02:00','03:00','04:00','05:00',
-                        '06:00','07:00','08:00','09:00','10:00','11:00',
-                        '12:00','13:00','14:00','15:00','16:00','17:00',
-                        '18:00','19:00','20:00','21:00','22:00','23:00'
+                        'product_type': 'reanalysis',
+                        'date': f"{start_date.strftime('%Y-%m-%d')}",
+                        'time': [f"{h:02}:00" for h in range(24)],
+                        'area': [
+                            self._bbox.ymax + 0.5, self._bbox.xmin - 0.5,
+                            self._bbox.ymin - 0.5, self._bbox.xmax + 0.5
                         ],
-                    'area': [self._bbox.ymax+0.5, self._bbox.xmin-0.5, self._bbox.ymin-0.5, self._bbox.xmax+0.5], # North, West, South, East. Default: global
-                    'format':'netcdf'
+                        'format': 'netcdf'
                     }
                 )
-                r.download(filename)
+                r.download(str(filename))
 
-                #unzip file
                 with ZipFile(filename, 'r') as zip_ref:
                     zip_ref.extractall(self.tmpdir)
-                    ds = xr.merge(
-                            [xr.open_dataset(self.tmpdir / fname)
-                                for fname in zip_ref.namelist()]
-                        ).rename({'avg_tprate': 'mtpr', 'avg_sdlwrf': 'msdwlwrf', 'avg_sdswrf': 'msdwswrf'})
-
-                    ds.to_netcdf(str(filename).split('.')[0] + '.nc')
-
+                    ds = xr.merge([
+                        xr.open_dataset(self.tmpdir / fname) for fname in zip_ref.namelist()
+                    ]).rename({
+                        'avg_tprate': 'mtpr',
+                        'avg_sdlwrf': 'msdwlwrf',
+                        'avg_sdswrf': 'msdwswrf'
+                    })
+                    nc_out = self.tmpdir / f"era5_{start_date.strftime('%Y%m%d')}.nc"
+                    print(f'saving: {nc_out}')
+                    ds.to_netcdf(nc_out)
+                    
                     [os.remove(self.tmpdir / fname) for fname in zip_ref.namelist()]
+
                 os.remove(filename)
 
-                start_date = end_date
-                end_date += timedelta(days=1)
-            
+            start_date = end_date
+            end_date += timedelta(days=1)
+            its += 1
 
     @property
-    def tmpdir(self):
-        if not hasattr(self, '_tmpdir'):
-            self._tmpdir = tempfile.TemporaryDirectory()
-        return pathlib.Path(self._tmpdir.name)
-
-    @tmpdir.setter
-    def tmpdir(self, value):
-        self._tmpdir = value
+    def tmpdir(self) -> pathlib.Path:
+        return self._tmpdir_path
 
     @property
     def files(self):
-        return sorted(list(self.tmpdir.glob('**/era5_*.nc')))
+        return sorted(self.tmpdir.glob('era5_*.nc'))
 
     @property
     def lon(self):
         if not hasattr(self, '_lon'):
-            self._lon = Dataset(self.files[0]).variables['longitude'][:]
-            if not hasattr(self, '_lat'):
-                self._lat = Dataset(self.files[0]).variables['latitude'][::-1]
+            self._load_coords()
         return self._lon
 
     @property
     def lat(self):
         if not hasattr(self, '_lat'):
-            self._lat = Dataset(self.files[0]).variables['latitude'][::-1]
-            if not hasattr(self, '_lon'):
-                self._lon = Dataset(self.files[0]).variables['longitude'][:]
+            self._load_coords()
         return self._lat
+
+    def _load_coords(self):
+        ds = Dataset(self.files[0])
+        self._lon = ds.variables['longitude'][:]
+        self._lat = ds.variables['latitude'][::-1]
 
     def xy_grid(self):
         return np.meshgrid(self.lon, self.lat)
+
+    def __del__(self):
+        if hasattr(self, '_tmpdir_obj') and self._tmpdir_obj is not None:
+            self._tmpdir_obj.cleanup()
 
 def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc, output_interval, OUTDIR):
     rt=pd.to_datetime(str(date))
@@ -180,7 +260,8 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
             dst['lat'].units = "degrees_north"
             dst['lat'][:] = ny_grid
             # time
-            dst.createVariable('time', 'f4', ('time',))
+            dst.createVariable('time', 'f8', ('time',)) # avoid precision errors
+            # dst.createVariable('time', 'f4', ('time',))
             dst['time'].long_name = 'Time'
             dst['time'].standard_name = 'time'
             dst['time'].units = f'days since {rt.year}-{rt.month}'\
@@ -343,7 +424,7 @@ class ERA5(SfluxDataset):
     ):
         self.start_date=start_date
         self.rnday=rnday
-        self.end_date=self.start_date+timedelta(self.rnday + 1)
+        self.end_date=self.start_date+timedelta(self.rnday)
 
         if self.start_date.hour != 0:
             raise ValueError(f"Start datetime hour different than 0.\

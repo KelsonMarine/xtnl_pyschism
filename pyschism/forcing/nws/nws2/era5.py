@@ -134,29 +134,37 @@ from netCDF4 import Dataset
 
 
 class ERA5DataInventory:
-    def __init__(self, start_date=None, rnday: Union[float, timedelta] = 4, bbox=None, tmpdir=None):
+    def __init__(self, start_date=None, rnday: Union[float, timedelta] = 4, bbox=None, tmpdir=None, datadir=None):
         self.start_date = start_date
         self.rnday = rnday
         self.end_date = self.start_date + timedelta(self.rnday + 1)
         self.client = cdsapi.Client()
         self._bbox = bbox
 
-        if tmpdir is not None:
-            self._tmpdir_path = pathlib.Path(tmpdir)
-            self._tmpdir_obj = None  # No TemporaryDirectory created
-        else:
-            self._tmpdir_obj = tempfile.TemporaryDirectory()
-            self._tmpdir_path = pathlib.Path(self._tmpdir_obj.name)
+        if datadir is None:
+            if tmpdir is not None:
+                self._tmpdir_path = pathlib.Path(tmpdir)
+                self._tmpdir_obj = None  # No TemporaryDirectory created
+            else:
+                self._tmpdir_obj = tempfile.TemporaryDirectory()
+                self._tmpdir_path = pathlib.Path(self._tmpdir_obj.name)
 
-        self._download_and_process_data()
+            self._download_and_process_data()
+        else: 
+            # use 
+            #  start_date: datetime = None, datetime.datetime
+            #  rnday: Union[float, timedelta] = 4,
+
+            self._tmpdir_path = pathlib.Path(datadir)
+
 
     def _download_and_process_data(self):
         start_date = self.start_date
-        end_date = self.start_date + timedelta(days=1)
+        tmp_end_date = self.start_date + timedelta(days=1)
         its = 0
-        while end_date < self.end_date or its == 0:
+        while tmp_end_date < self.end_date or its == 0:
             filename = self.tmpdir / f"era5_{start_date.strftime('%Y%m%d')}.zip"
-            print(f"\n{start_date} to {end_date}\n")
+            print(f"\n{start_date} to {tmp_end_date}\n")
             if not filename.exists():
                 print(f"ERA5DataInventory Downloading: {start_date.strftime('%Y-%m-%d')} to {filename}")
                 r = self.client.retrieve(
@@ -198,8 +206,8 @@ class ERA5DataInventory:
 
                 os.remove(filename)
 
-            start_date = end_date
-            end_date += timedelta(days=1)
+            start_date = tmp_end_date
+            tmp_end_date += timedelta(days=1)
             its += 1
 
     @property
@@ -234,13 +242,13 @@ class ERA5DataInventory:
         if hasattr(self, '_tmpdir_obj') and self._tmpdir_obj is not None:
             self._tmpdir_obj.cleanup()
 
-def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc, output_interval, OUTDIR):
+def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc, output_interval, OUTDIR, level: int=1):
     rt=pd.to_datetime(str(date))
     idx=np.where(rt == timevector)[0].item()
     times=[i/24 for i in np.arange(0, 25, output_interval)]
 
     if air is True:
-        with Dataset(OUTDIR / "sflux_air_1.{:04}.nc".format(iday+1), 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset(OUTDIR / f"sflux_air_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -314,7 +322,7 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
             dst['vwind'][:,:,:]=ds['v10'][idx:idx+25:output_interval, ::-1, :]
 
     if prc is True:
-        with Dataset(OUTDIR / "sflux_prc_1.{:04}.nc".format(iday+1), 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset(OUTDIR / f"sflux_prc_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -344,13 +352,13 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
 
             # prate
             dst.createVariable('prate', 'f4', ('time', 'ny_grid', 'nx_grid'))
-            dst['prate'].long_name = "Surface Precipitation Rate"
+            dst['prate'].long_name = "air_pressure_at_sea_level"
             dst['prate'].standard_name = "air_pressure_at_sea_level"
             dst['prate'].units = "kg/m^2/s"
             dst['prate'][:,:,:]=ds['mtpr'][idx:idx+25:output_interval, ::-1, :]
 
     if rad is True:
-        with Dataset(OUTDIR / "sflux_rad_1.{:04}.nc".format(iday+1), 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset( OUTDIR / f"sflux_rad_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -385,9 +393,9 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
             dst['dlwrf'].units = "W/m^2"
             dst['dlwrf'][:,:,:]=ds['msdwlwrf'][idx:idx+25:output_interval, ::-1, :]
 
-            # dwrf
+            # dswrf
             dst.createVariable('dswrf', 'f4', ('time', 'ny_grid', 'nx_grid'))
-            dst['dswrf'].long_name = "Downward Long Wave Radiation Flux"
+            dst['dswrf'].long_name = "Downward Short Wave Radiation Flux"
             dst['dswrf'].standard_name = "surface_downwelling_shortwave_flux_in_air"
             dst['dswrf'].units = "W/m^2"
             dst['dswrf'][:,:,:]=ds['msdwswrf'][idx:idx+25:output_interval, ::-1, :]
@@ -418,13 +426,14 @@ class ERA5(SfluxDataset):
         prc: bool = True,
         rad: bool = True,
         bbox: Bbox = None,
+        level: int = 1,
         overwrite: bool=False,
         output_interval: int = 1,
         tmpdir = None,
     ):
         self.start_date=start_date
         self.rnday=rnday
-        self.end_date=self.start_date+timedelta(self.rnday)
+        end_date=self.start_date+timedelta(self.rnday)
 
         if self.start_date.hour != 0:
             raise ValueError(f"Start datetime hour different than 0.\
@@ -432,7 +441,7 @@ class ERA5(SfluxDataset):
 
         dates = {_: None for _ in np.arange(
             self.start_date,
-            self.end_date,
+            end_date,
             np.timedelta64(1, 'D'),
             dtype='datetime64')}
 
@@ -464,4 +473,4 @@ class ERA5(SfluxDataset):
             ds=Dataset(file)
             time1=ds['valid_time']
             times=nc4.num2date(time1,units=time1.units,only_use_cftime_datetimes=False)
-            put_sflux_fields(iday, date, times, ds, nx_grid, ny_grid, air=air, rad=rad, prc=prc, output_interval=output_interval, OUTDIR=outdir)
+            put_sflux_fields(iday, date, times, ds, nx_grid, ny_grid, air=air, rad=rad, prc=prc, output_interval=output_interval, OUTDIR=outdir, level=level)

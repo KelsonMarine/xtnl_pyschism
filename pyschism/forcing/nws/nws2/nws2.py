@@ -43,7 +43,7 @@ class NWS2(NWS):
         self,
         path: Union[str, os.PathLike],
         start_date=None,
-        end_date=None,
+        rnday=None,
         bbox=None,
         overwrite: bool = False,
         windrot: bool = True,
@@ -63,9 +63,9 @@ class NWS2(NWS):
         if self.sflux_1 is not None:
             self.sflux_1.write(
                 outdir=path,
-                # level=1,
+                level=1,
                 start_date=start_date,
-                rnday=end_date,
+                rnday=rnday,
                 air=air,
                 rad=rad,
                 prc=prc,
@@ -75,9 +75,9 @@ class NWS2(NWS):
         if self.sflux_2 is not None:
             self.sflux_2.write(
                 outdir=path,
-                # level=2,
+                level=2,
                 start_date=start_date,
-                rnday=end_date,
+                rnday=rnday,
                 air=air,
                 rad=rad,
                 prc=prc,

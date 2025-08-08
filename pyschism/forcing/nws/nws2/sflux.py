@@ -72,10 +72,11 @@ class DatetimeArrays:
         for field in obj.fields:
             dt_array = []
             for dt in field.construct('time').datetime_array:
-                if not isinstance(dt, cftime.DatetimeGregorian):
+                if not isinstance(dt, (cftime.DatetimeGregorian, cftime.DatetimeProlepticGregorian)):
                     continue
-                dt_array.append(pytz.timezone('UTC').localize(
-                    datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute)))
+                dt_array.append(
+                    pytz.timezone('UTC').localize(datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute))
+                    )
             yield dt_array
 
 
@@ -117,41 +118,45 @@ class Variable:
         self.standard_name = standard_name
         self.units = units
 
-    def get_fields(self, start_date: datetime = None,
-                   rnday: Union[float, int, timedelta] = None,
-                   ) -> cf.FieldList:
+    def get_fields(self, start_date: datetime = None, rnday: Union[float, int, timedelta] = None) -> cf.FieldList:
         if start_date is None:
             start_date = self.datetime_array[0]
 
-        if start_date < np.min(self.datetime_array) or \
-                start_date > np.max(self.datetime_array):
+        if start_date < np.min(self.datetime_array) or start_date > np.max(self.datetime_array):
             raise ValueError(f'Requested start date {start_date} is out of '
                              f'range with {np.min(self.datetime_array)} and '
                              f'{np.max(self.datetime_array)}')
         if rnday is None:
             rnday = np.max(self.datetime_array[:-2]) - start_date
-
         elif isinstance(rnday, (int, float)):
             rnday = timedelta(days=rnday)
 
-        end_date = start_date + rnday  # type: ignore[operator]
+        end_date = start_date + rnday 
 
-        #if end_date <= np.min(self.datetime_array) or \
-        #        end_date >= np.max(self.datetime_array):
+        if end_date <= np.min(self.datetime_array) or end_date >= np.max(self.datetime_array):
         #    rnday = end_date - start_date
-        #    raise ValueError(f'Requested rnday {rnday} has an end date of '
-        #                     f'{end_date} which is out of range with '
-        #                     f'start_date={np.min(self.datetime_array)} and '
-        #                     f'end_date={np.max(self.datetime_array)}')
+           raise ValueError(f'Requested rnday {rnday} has an end date of '
+                            f'{end_date} which is out of range with '
+                            f'start_date={np.min(self.datetime_array)} and '
+                            f'end_date={np.max(self.datetime_array)}')
+
+        # old, returned fields beyond end_date
+        # fields = []
+        # for i, datetime_array in reversed(list(enumerate(self.datetime_arrays))):
+        #     field_start_date = np.min(datetime_array)
+        #     if field_start_date >= start_date:
+        #         fields.append(self.fields[i])
+        #     else:
+        #         fields.append(self.fields[i])
+        #         break
+
         fields = []
-        for i, datetime_array in reversed(
-                list(enumerate(self.datetime_arrays))):
+        for i, datetime_array in enumerate(list(self.datetime_arrays)):
             field_start_date = np.min(datetime_array)
-            if field_start_date >= start_date:
+            field_end_date = np.max(datetime_array)
+            if field_start_date >= start_date and end_date <= field_end_date:
                 fields.append(self.fields[i])
-            else:
-                fields.append(self.fields[i])
-                break
+           
         return cf.FieldList(fields)
 
     def animation(
@@ -266,9 +271,14 @@ class BaseComponent(ABC):
 
     name: str = ''
 
-    def write(self, outdir: Union[str, os.PathLike], level: int,
-              overwrite: bool = False, start_date: datetime = None,
-              rnday: Union[float, int, timedelta] = None):
+    def write(
+            self, 
+            outdir: Union[str, os.PathLike], 
+            level: int,
+            overwrite: bool = False, 
+            start_date: datetime = None,
+            rnday: Union[float, int, timedelta] = None
+              ):
 
         assert level in [1, 2]
         outdir = pathlib.Path(outdir)
@@ -281,76 +291,209 @@ class BaseComponent(ABC):
 
         if start_date is not None:
             # naive condition
-            if start_date.tzinfo is None \
-                    or start_date.tzinfo.utcoffset(start_date) is None:
+            if start_date.tzinfo is None or start_date.tzinfo.utcoffset(start_date) is None:
                 start_date = pytz.timezone('UTC').localize(start_date)
             timezone = start_date.tzinfo
 
-        stacks = []
-        for i, field in enumerate(
-            getattr(
-                self,
-                self.var_types[0]
-                ).get_fields(start_date, rnday)
-                ):
-            stacks.append(f"sflux_{self.name}_{level}.{i+1:04d}.nc")
-        for i, filename in enumerate(stacks):
-            with Dataset(outdir / filename, 'w',
-                         format='NETCDF3_CLASSIC') as dst:
-                dst.setncatts({"Conventions": "CF-1.0"})
-                # dimensions
-                variable = getattr(self, self.var_types[0])
-                dst.createDimension('nx_grid',
-                                    variable.nx_grids[0].shape[1])
-                dst.createDimension('ny_grid',
-                                    variable.ny_grids[0].shape[0])
-                dst.createDimension('time', None)
-                # variables
-                # lon
-                dst.createVariable('lon', 'f4', ('ny_grid', 'nx_grid'))
-                dst['lon'].long_name = "Longitude"
-                dst['lon'].standard_name = "longitude"
-                dst['lon'].units = "degrees_east"
-                dst['lon'][:] = variable.nx_grids[0]
-                # lat
-                dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
-                dst['lat'].long_name = "Latitude"
-                dst['lat'].standard_name = "latitude"
-                dst['lat'].units = "degrees_north"
-                dst['lat'][:] = variable.ny_grids[0]
-                nc_start_date = list(variable.reference_datetimes)[0]
-                nc_start_date = nc_start_date.astimezone(timezone)
-                dst.createVariable('time', 'f4', ('time',))
-                dst['time'].long_name = 'Time'
-                dst['time'].standard_name = 'time'
-                dst['time'].units = f'days since {nc_start_date.year}-' \
-                                    f'{nc_start_date.month}-'\
-                                    f'{nc_start_date.day} '\
-                                    '00:00:00+' \
-                                    f'{nc_start_date.tzinfo}'
-                dst['time'].base_date = (
-                    nc_start_date.year,
-                    nc_start_date.month,
-                    nc_start_date.day,
-                    0)
-                dst['time'][:] = [
-                    (localize_datetime(x) - nc_start_date) / timedelta(days=1)
-                    for x in variable.datetime_array]
-                for vartype in self.var_types:
-                    variable = getattr(self, vartype)
-                    dst.createVariable(
-                        variable.name, 'f4', ('time', 'ny_grid', 'nx_grid'))
-                    for field in variable.get_fields(start_date, rnday):
-                        dst[variable.name][:] = field
-                        setattr(
-                            dst[variable.name], "long_name",
-                            variable.long_name)
-                        setattr(
-                            dst[variable.name], "standard_name",
-                            variable.standard_name)
-                        setattr(
-                            dst[variable.name], "units",
-                            variable.units)
+        if isinstance(rnday,(float,int)):
+            rnday = timedelta(days=rnday)
+
+        end_date = start_date + rnday
+
+        # base date used in netcdf
+        nc_start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone)
+                
+        for i, field in enumerate(getattr(self,self.var_types[0]).get_fields(start_date, rnday)):
+            
+            filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
+            if pathlib.Path(outdir / filename).exists() and not overwrite:
+                print(f'{outdir / filename} exists and overwrite={overwrite} ... skipping ...')
+                continue
+            else:
+
+                # --- Parse time
+
+                # cftime to datetime
+                stack_cftime_array = field.construct('time').datetime_array # returns subset array of cftime matching filename stack (i) 
+                stack_datetime_list = [
+                        localize_datetime(datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond))
+                        for t in stack_cftime_array
+                    ]
+
+                time_in_days_since_nc_start_date = [
+                        (t - nc_start_date) / timedelta(days=1) for t in stack_datetime_list
+                    ]
+                time_in_days_since_nc_start_date = np.asarray(time_in_days_since_nc_start_date, dtype='f8')
+
+                # mask time dimension based on start_date and end_date
+                tarr = np.array(stack_datetime_list, dtype='datetime64[ns]')
+                time_mask = (tarr >= np.datetime64(start_date)) & (tarr <= np.datetime64(end_date))
+                ntime = time_in_days_since_nc_start_date[time_mask].size
+
+                variable = getattr(self, self.var_types[0]) # use first var_type as 'driver' var for dimensions and lon lat time
+
+                print(f'    writing: {filename}')
+                with Dataset(outdir / filename, 'w',format='NETCDF3_CLASSIC') as dst:
+                                        
+                    dst.setncatts({"Conventions": "CF-1.0"})
+
+                    # dimensions
+                    dst.createDimension('nx_grid',variable.nx_grids[0].shape[1])
+                    dst.createDimension('ny_grid',variable.ny_grids[0].shape[0])
+                    dst.createDimension('time',None)
+                    # variables
+                    # lon
+                    dst.createVariable('lon', 'f4', ('ny_grid', 'nx_grid'))
+                    dst['lon'].long_name = "Longitude"
+                    dst['lon'].standard_name = "longitude"
+                    dst['lon'].units = "degrees_east"
+                    dst['lon'][:] = variable.nx_grids[0]
+                    # lat
+                    dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
+                    dst['lat'].long_name = "Latitude"
+                    dst['lat'].standard_name = "latitude"
+                    dst['lat'].units = "degrees_north"
+                    dst['lat'][:] = variable.ny_grids[0]
+
+                    dst.createVariable('time', 'f8', ('time',)) # changed from f4 for more precision
+                    dst['time'].long_name = 'Time'
+                    dst['time'].standard_name = 'time'
+                    dst['time'].units = f'days since {nc_start_date.year}-' \
+                                        f'{nc_start_date.month}-'\
+                                        f'{nc_start_date.day} '\
+                                        '00:00:00+' \
+                                        f'{nc_start_date.tzinfo}'
+                    dst['time'].base_date = (
+                        nc_start_date.year,
+                        nc_start_date.month,
+                        nc_start_date.day,
+                        0)
+
+                    dst['time'][:] = time_in_days_since_nc_start_date[time_mask] 
+
+                    # --- this was writing all data to each netcdf for each time instance ... 
+                    # for vartype in self.var_types:
+                    #     variable = getattr(self, vartype)
+                    #     dst.createVariable(variable.name, 'f4', ('time', 'ny_grid', 'nx_grid'))
+                    #     for var_field in variable.get_fields(start_date, rnday):
+                    #         dst[variable.name][:] = field
+                    #         setattr(dst[variable.name], "long_name", variable.long_name)
+                    #         setattr(dst[variable.name], "standard_name", variable.standard_name)
+                    #         setattr(dst[variable.name], "units", variable.units)
+
+                    # ---- data variables (ONLY the i-th stack), streamed by time ----
+                    for vartype in self.var_types:
+                        variable = getattr(self, vartype)
+                        varname = variable.name
+
+                        vout = dst.createVariable(varname, 'f4', ('time', 'ny_grid', 'nx_grid'))
+                        setattr(vout, "long_name",   variable.long_name)
+                        setattr(vout, "standard_name", variable.standard_name)
+                        setattr(vout, "units",       variable.units)
+
+                        # find ONLY the i-th stack for this variable without loading all stacks by iterating until i, then break
+                        var_field_i = None
+                        for k, var_field in enumerate(variable.get_fields(start_date, rnday)):
+                            if k == i:
+                                var_field_i = var_field
+                                break
+                        if var_field_i is None:
+                            raise IndexError(f"{varname}: missing stack index {i}")
+
+                        # Sanity check on time length
+                        # (var_field_i should have same # of times as 'field' from the driver)
+                        # cf.Field: get time size via construct:
+                        var_times_cf = var_field_i.construct('time').datetime_array
+                        if len(var_times_cf[time_mask]) != ntime:
+                            raise ValueError(
+                                f"{varname}: time length mismatch (stack {i}): "
+                                f"{len(var_times_cf)} vs {ntime}"
+                            )
+
+                        # Stream write each time slice to avoid loading the full 3D array
+                        # cf.Field supports .data[...] returning a dask-like subarray
+                        # use .array to realize just that slice ... 
+                        k = 0
+                        for j, keep in enumerate(time_mask):
+                            if not keep:
+                                continue
+                            arr2d = var_field_i.data[j, :, :].array
+                            vout[k, :, :] = arr2d
+                            k += 1
+
+        # # commented out code above did not account for start_date and rnday when dataset was initalized from a pathlib glob (i.e. multiple netcdf files)
+        # # refactor to fix:
+        # # - writing all times in dataset to each netcdf file in stack 
+        # #   - datetime_array and timevector point to the full dataset, not just the start_date to start_date + rnday
+        
+        # nc_start_date = self.timevector[0] # same as getattr(self, self.var_types[0]).datetime_array 
+        # nc_start_date = nc_start_date.astimezone(timezone)
+        # variable = getattr(self, self.var_types[0])
+        # stack = 0
+        # time_in_days = [(localize_datetime(x) - nc_start_date) / timedelta(days=1) for x in variable.datetime_array]
+        # for i, t in self.timevector:
+            
+        #     # write one netcdf file for each day in timevector
+        #     if start_date <= t and t <= start_date + rnday:
+        #         stack += 1
+        #         filename = f"sflux_{self.name}_{level}.{stack:04d}.nc"
+        #         with Dataset(outdir / filename, 'w', format='NETCDF3_CLASSIC') as dst:
+                    
+        #             dst.setncatts({"Conventions": "CF-1.0"})
+
+        #             # Assign dimensions
+        #             dst.createDimension('nx_grid',variable.nx_grids[0].shape[1])
+        #             dst.createDimension('ny_grid',variable.ny_grids[0].shape[0])
+        #             dst.createDimension('time', None) # unlimited
+
+        #             # Assign variables
+        #             # lon
+        #             dst.createVariable('lon', 'f4', ('ny_grid', 'nx_grid'))
+        #             dst['lon'].long_name = "Longitude"
+        #             dst['lon'].standard_name = "longitude"
+        #             dst['lon'].units = "degrees_east"
+        #             dst['lon'][:] = variable.nx_grids[0]
+        #             # lat
+        #             dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
+        #             dst['lat'].long_name = "Latitude"
+        #             dst['lat'].standard_name = "latitude"
+        #             dst['lat'].units = "degrees_north"
+        #             dst['lat'][:] = variable.ny_grids[0]
+
+        #             # time
+        #             dst.createVariable('time', 'f4', ('time',))
+        #             dst['time'].long_name = 'Time'
+        #             dst['time'].standard_name = 'time'
+        #             dst['time'].units = f'days since {nc_start_date.year}-' \
+        #                                 f'{nc_start_date.month}-'\
+        #                                 f'{nc_start_date.day} '\
+        #                                 '00:00:00+' \
+        #                                 f'{nc_start_date.tzinfo}'
+        #             dst['time'].base_date = (
+        #                 nc_start_date.year,
+        #                 nc_start_date.month,
+        #                 nc_start_date.day,
+        #                 0)
+                    
+        #             # convert variable.datetime_array time in units of days since YYYY MM DD 00:00:00
+        #             dst['time'][:] = time_in_days
+
+        #             # atmos variable fields to dst
+        #             for vartype in self.var_types:
+        #                 variable = getattr(self, vartype)
+        #                 dst.createVariable(variable.name, 'f4', ('time', 'ny_grid', 'nx_grid'))
+                        
+        #                 for field in variable.get_fields(start_date, rnday):
+        #                     dst[variable.name][:] = field
+        #                     setattr(
+        #                         dst[variable.name], "long_name",
+        #                         variable.long_name)
+        #                     setattr(
+        #                         dst[variable.name], "standard_name",
+        #                         variable.standard_name)
+        #                     setattr(
+        #                         dst[variable.name], "units",
+        #                         variable.units)
 
     @property
     @abstractmethod

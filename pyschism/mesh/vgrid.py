@@ -196,26 +196,51 @@ class LSC2(Vgrid):
 
             self.m_grid = z_mas
 
-    def make_m_plot(self):
-        '''
-        plot master grid
-        Adapted from:
-        https://github.com/wzhengui/pylibs/blob/master/pyScripts/gen_vqs.py
-        '''        
-        #check master grid
-        for i in np.arange(self.nhm-1):
-            if min(self.m_grid[i,:self.nv[i]]-self.m_grid[i+1,:self.nv[i]])<0: \
-                print('check: master grid layer={}, hsm={}, nv={}'.\
-                      format(i+1,self.hsm[i+1],self.nv[i+1]))
+    # def make_m_plot(self):
+    #     '''
+    #     plot master grid
+    #     Adapted from:
+    #     https://github.com/wzhengui/pylibs/blob/master/pyScripts/gen_vqs.py
+    #     '''        
+    #     #check master grid
+    #     for i in np.arange(self.nhm-1):
+    #         if min(self.m_grid[i,:self.nv[i]]-self.m_grid[i+1,:self.nv[i]])<0: \
+    #             print('check: master grid layer={}, hsm={}, nv={}'.\
+    #                   format(i+1,self.hsm[i+1],self.nv[i+1]))
 
-        #plot master grid
-        figure(figsize=[10,5])
-        for i in np.arange(self.nhm): plot(i*np.ones(self.nv[-1]),\
-                                           self.m_grid[i],'k-',lw=0.3)
-        for k in np.arange(self.nv[-1]): plot(np.arange(self.nhm),\
-                                            self.m_grid.T[k],'k-',lw=0.3)
-        setp(gca(),xlim=[-0.5,self.nhm-0.5],ylim=[-self.hsm[-1],0.5])
-        gcf().tight_layout()
+    #     #plot master grid
+    #     figure(figsize=[10,5])
+    #     for i in np.arange(self.nhm): plot(i*np.ones(self.nv[-1]),\
+    #                                        self.m_grid[i],'k-',lw=0.3)
+    #     for k in np.arange(self.nv[-1]): plot(np.arange(self.nhm),\
+    #                                         self.m_grid.T[k],'k-',lw=0.3)
+    #     setp(gca(),xlim=[-0.5,self.nhm-0.5],ylim=[-self.hsm[-1],0.5])
+    #     gcf().tight_layout()
+    
+    def make_m_plot(self, axes=None):
+        """
+        Plot master grid on provided axes or use current axes.
+        """
+        import matplotlib.pyplot as plt
+
+        for i in np.arange(self.nhm - 1):
+            if np.min(self.m_grid[i, :self.nv[i]] - self.m_grid[i + 1, :self.nv[i]]) < 0:
+                print(f'check: master grid layer={i+1}, hsm={self.hsm[i+1]}, nv={self.nv[i+1]}')
+
+        if axes is None:
+            fig, axes = plt.subplots(figsize=[10, 5])
+
+        # Use the axes object for plotting
+        for i in np.arange(self.nhm): 
+            axes.plot(i * np.ones(self.nv[i]), self.m_grid[i, :self.nv[i]], 'k-', lw=0.3)
+        for k in np.arange(self.nv[-1]): 
+            axes.plot(np.arange(self.nhm), self.m_grid.T[k], 'k-', lw=0.3)
+
+        axes.set_xlim([-0.5, self.nhm - 0.5])
+        axes.set_ylim([-self.hsm[-1], 0.5])
+        axes.set_title("Master VGrid")
+        axes.set_xlabel("Vertical Column Index")
+        axes.set_ylabel("Depth [m]")
 
     def calc_lsc2_att(self, gr3, crs=None):
         '''

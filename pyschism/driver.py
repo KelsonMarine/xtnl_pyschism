@@ -68,7 +68,7 @@ class ModelForcings:
                 self.nws.write(
                     output_directory,
                     start_date=driver.param.opt.start_date,
-                    end_date=driver.param.core.rnday, # this does not make sense!!
+                    rnday=driver.param.core.rnday, 
                     overwrite=overwrite,
                     bbox=driver.config.hgrid.get_bbox(output_type="bbox"),
                     air=True,
@@ -549,7 +549,7 @@ class ModelDriver:
                 self.outdir / param, overwrite, use_template=use_param_template
             )
 
-        if (self.config.waves is not None) or (wwm_param is not False):
+        if (self.config.waves is not None): # or (wwm_param is not False):
             wwm_param = "wwminput.nml" if wwm_param is True else param
             self.wwm_param.write(
                 filename=self.outdir / wwm_param, force=True if overwrite else False, sort=False # consider re-defining .write method so it is like Param.write()

@@ -118,44 +118,50 @@ class Variable:
         self.standard_name = standard_name
         self.units = units
 
-    def get_fields(self, start_date: datetime = None, rnday: Union[float, int, timedelta] = None) -> cf.FieldList:
-        if start_date is None:
-            start_date = self.datetime_array[0]
+    def get_fields(self, start_date: datetime = None, rnday: Union[float, int, timedelta] = None, stack: int = None) -> cf.FieldList:
+        
+        if stack is None: # use start_date and rnday to find field(s)
+        
+            if start_date is None:
+                start_date = self.datetime_array[0]
 
-        if start_date < np.min(self.datetime_array) or start_date > np.max(self.datetime_array):
-            raise ValueError(f'Requested start date {start_date} is out of '
-                             f'range with {np.min(self.datetime_array)} and '
-                             f'{np.max(self.datetime_array)}')
-        if rnday is None:
-            rnday = np.max(self.datetime_array[:-2]) - start_date
-        elif isinstance(rnday, (int, float)):
-            rnday = timedelta(days=rnday)
+            if start_date < np.min(self.datetime_array) or start_date > np.max(self.datetime_array):
+                raise ValueError(f'Requested start date {start_date} is out of '
+                                f'range with {np.min(self.datetime_array)} and '
+                                f'{np.max(self.datetime_array)}')
+            if rnday is None:
+                rnday = np.max(self.datetime_array[:-2]) - start_date
+            elif isinstance(rnday, (int, float)):
+                rnday = timedelta(days=rnday)
 
-        end_date = start_date + rnday 
+            end_date = start_date + rnday 
 
-        if end_date <= np.min(self.datetime_array) or end_date >= np.max(self.datetime_array):
-        #    rnday = end_date - start_date
-           raise ValueError(f'Requested rnday {rnday} has an end date of '
-                            f'{end_date} which is out of range with '
-                            f'start_date={np.min(self.datetime_array)} and '
-                            f'end_date={np.max(self.datetime_array)}')
+            if end_date <= np.min(self.datetime_array) or end_date >= np.max(self.datetime_array):
+                #    rnday = end_date - start_date
+                raise ValueError(f'Requested rnday {rnday} has an end date of '
+                                    f'{end_date} which is out of range with '
+                                    f'start_date={np.min(self.datetime_array)} and '
+                                    f'end_date={np.max(self.datetime_array)}')
 
-        # old, returned fields beyond end_date
-        # fields = []
-        # for i, datetime_array in reversed(list(enumerate(self.datetime_arrays))):
-        #     field_start_date = np.min(datetime_array)
-        #     if field_start_date >= start_date:
-        #         fields.append(self.fields[i])
-        #     else:
-        #         fields.append(self.fields[i])
-        #         break
+            # old, returned fields beyond end_date
+            # fields = []
+            # for i, datetime_array in reversed(list(enumerate(self.datetime_arrays))):
+            #     field_start_date = np.min(datetime_array)
+            #     if field_start_date >= start_date:
+            #         fields.append(self.fields[i])
+            #     else:
+            #         fields.append(self.fields[i])
+            #         break
 
-        fields = []
-        for i, datetime_array in enumerate(list(self.datetime_arrays)):
-            field_start_date = np.min(datetime_array)
-            field_end_date = np.max(datetime_array)
-            if field_start_date >= start_date and end_date <= field_end_date:
-                fields.append(self.fields[i])
+            fields = []
+            for i, datetime_array in enumerate(list(self.datetime_arrays)):
+                field_start_date = np.min(datetime_array)
+                # field_end_date = np.max(datetime_array)
+                if field_start_date >= start_date and not field_start_date > end_date: # and end_date <= field_end_date:
+                    fields.append(self.fields[i])
+        else:
+
+            fields = [self.fields[stack]]
            
         return cf.FieldList(fields)
 
@@ -391,24 +397,22 @@ class BaseComponent(ABC):
                         setattr(vout, "standard_name", variable.standard_name)
                         setattr(vout, "units",       variable.units)
 
-                        # find ONLY the i-th stack for this variable without loading all stacks by iterating until i, then break
-                        var_field_i = None
-                        for k, var_field in enumerate(variable.get_fields(start_date, rnday)):
-                            if k == i:
-                                var_field_i = var_field
-                                break
-                        if var_field_i is None:
-                            raise IndexError(f"{varname}: missing stack index {i}")
+                        # # find ONLY the i-th stack for this variable without loading all stacks by iterating until i, then break
+                        # var_field_i = None
+                        # for k, var_field in enumerate(variable.get_fields(start_date, rnday)):
+                        #     if k == i:
+                        #         var_field_i = var_field
+                        #         break
+                        # if var_field_i is None:
+                        #     raise IndexError(f"{varname}: missing stack index {i}")
 
-                        # Sanity check on time length
-                        # (var_field_i should have same # of times as 'field' from the driver)
+                        var_field_i = variable.get_fields(stack=i)[0]
+
+                        # verify var_field_i should have same # of times as 'field' from the driver
                         # cf.Field: get time size via construct:
                         var_times_cf = var_field_i.construct('time').datetime_array
                         if len(var_times_cf[time_mask]) != ntime:
-                            raise ValueError(
-                                f"{varname}: time length mismatch (stack {i}): "
-                                f"{len(var_times_cf)} vs {ntime}"
-                            )
+                            raise ValueError(f"{varname}: time length mismatch (stack {i}):{len(var_times_cf)} vs {ntime}")
 
                         # Stream write each time slice to avoid loading the full 3D array
                         # cf.Field supports .data[...] returning a dask-like subarray
@@ -568,7 +572,13 @@ class SfluxDataset:
                  spfh_name='spfh', stmp_name='stmp', uwind_name='uwind',
                  vwind_name='vwind', prate_name='prate', dlwrf_name='dlwrf',
                  dswrf_name='dswrf'):
-        self.resource = resource
+    
+        if hasattr(resource, '__iter__') and not isinstance(resource, (str, bytes, pathlib.Path)):
+            # probably a generator/iterator: materialize + sort
+            files = sorted(str(p) for p in resource)
+        else:
+            files = [str(resource)]
+        self.resource = files
         self.air = AirComponent(self.fields, prmsl_name=prmsl_name,
                                 spfh_name=spfh_name, stmp_name=stmp_name,
                                 uwind_name=uwind_name, vwind_name=vwind_name)

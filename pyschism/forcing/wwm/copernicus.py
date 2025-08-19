@@ -32,11 +32,8 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
         self.dataset_id = ['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H']
 
         self.filewave = 'bndfiles.dat'
-        if ds is not None:
-            self.ds = ds
-        elif filepath is not None:
-            self.filepath = filepath
-
+        self.ds = ds
+        self.filepath = filepath
         self.username = username
         self.password = password
         self.iboundformat = iboundformat
@@ -365,15 +362,18 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
             bbox = None
             ):
         
-        copernicusmarine_subset_filename = self.download_GLOBAL_MULTIYEAR_WAV_001_032(
-            outdir=outdir,
-            start_datetime = start_datetime,
-            rnday = rnday,
-            end_datetime=end_datetime,
-            bbox = bbox,
-            overwrite = False,
-            )
-        
+        if self.filepath is None:
+            copernicusmarine_subset_filename = self.download_GLOBAL_MULTIYEAR_WAV_001_032(
+                outdir=outdir,
+                start_datetime = start_datetime,
+                rnday = rnday,
+                end_datetime=end_datetime,
+                bbox = bbox,
+                overwrite = False,
+                )
+        else:
+            copernicusmarine_subset_filename = self.filepath
+
         self.format_GLOBAL_MULTIYEAR_WAV_001_032(copernicusmarine_subset_filename)
 
         self.WWM_IBOUNDFORMAT_3.write(outdir=outdir,overwrite=overwrite)

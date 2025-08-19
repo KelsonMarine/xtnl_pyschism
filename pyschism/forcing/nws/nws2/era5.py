@@ -416,6 +416,7 @@ class ERA5(SfluxDataset):
         self.air = None
         self.prc = None
         self.rad = None
+        self.datadir = None
 
     def write(
         self,
@@ -430,10 +431,14 @@ class ERA5(SfluxDataset):
         overwrite: bool=False,
         output_interval: int = 1,
         tmpdir = None,
+        datadir = None
     ):
         self.start_date=start_date
         self.rnday=rnday
         end_date=self.start_date+timedelta(self.rnday)
+
+        if datadir is not None:
+            self.datadir = datadir
 
         if self.start_date.hour != 0:
             raise ValueError(f"Start datetime hour different than 0.\
@@ -454,7 +459,8 @@ class ERA5(SfluxDataset):
             self.start_date,
             self.rnday,
             bbox,
-            tmpdir = tmpdir
+            tmpdir = tmpdir,
+            datadir = self.datadir
         )
 
         logger.info('Finished downloading ERA5')

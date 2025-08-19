@@ -522,6 +522,8 @@ class ModelDriver:
         if not (self.outdir / "outputs").exists():
             (self.outdir / "outputs").mkdir(parents=True, exist_ok=overwrite)
 
+        
+
         if hgrid is not False:
             hgrid = "hgrid.gr3" if hgrid is True else hgrid
             self.config.hgrid.write(self.outdir / hgrid, overwrite)
@@ -873,6 +875,10 @@ class ModelConfig(metaclass=ModelConfigMeta):
         nhot_write: Union[int, timedelta] = None,
         stations: Stations = None,
         server_config: ServerConfig = None,
+        param: Param = None,
+        wwm_param: WWM_Param = None,
+        param_template=None,
+        wwm_param_template=None,
         **surface_outputs,
     ) -> ModelDriver:
 
@@ -909,6 +915,10 @@ class ModelConfig(metaclass=ModelConfigMeta):
             elev_ic=None,
             temp_ic=None,
             salt_ic=None,
+            param=param,
+            wwm_param=wwm_param,
+            param_template=param_template,
+            wwm_param_template=wwm_param_template,
             **surface_outputs,
         )
 

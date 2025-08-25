@@ -21,7 +21,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
 
     def __init__(
         self,
-        ds: WWM_IBOUNDFORMAT_3 = None,
+        ds: xr.Dataset = None,
         username: str = None,
         password: str = None,
         filepath: Union[pathlib.Path,str]  = None,
@@ -32,6 +32,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
         self.dataset_id = ['cmems_mod_glo_wav_my_0.2deg_PT3H-i', 'cmems_mod_glo_wav_myint_0.2deg_PT3H']
 
         self.filewave = 'bndfiles.dat'
+        # self.WWM_IBOUNDFORMAT_3 = WWM_IBOUNDFORMAT_3(ds=ds)
         self.ds = ds
         self.filepath = filepath
         self.username = username
@@ -113,55 +114,78 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
             max_lat=bbox.ymax
             
             assert isinstance(outdir, pathlib.Path), "outdir must be a pathlib.Path object"
-            try:
-                filename = (
+            filename = (
                     f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
                     f"_N={min_lat:1.2f}_{max_lat:1.2f}"
                     f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
                 )
-                copernicusmarine_subset_filename = outdir / filename        
-                if not copernicusmarine_subset_filename.is_file():
-                    # --- Subset dataset
-                    copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
-                    copernicusmarine.subset(
-                        dataset_id='cmems_mod_glo_wav_my_0.2deg_PT3H-i',
-                        variables=variables.keys(),
-                        minimum_longitude=min_lon,
-                        minimum_latitude=min_lat,
-                        maximum_longitude=max_lon,
-                        maximum_latitude=max_lat,
-                        coordinates_selection_method='inside',
-                        start_datetime=start_datetime, 
-                        end_datetime=end_datetime,
-                        output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
-                        overwrite=overwrite
-                        # output_directory = "./-" # default is current directory
-                        )
-            except: 
-                print('subsetting iterim product ... ')
-                filename = (
-                    f"cmems_mod_glo_wav_myint_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
-                    f"_N={min_lat:1.2f}_{max_lat:1.2f}"
-                    f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
-                )
-                copernicusmarine_subset_filename = outdir / filename        
-                if not copernicusmarine_subset_filename.is_file():
-                    # --- Subset dataset
-                    copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
-                    copernicusmarine.subset(
-                        dataset_id='cmems_mod_glo_wav_myint_0.2deg_PT3H-i',
-                        variables=variables.keys(),
-                        minimum_longitude=min_lon,
-                        minimum_latitude=min_lat,
-                        maximum_longitude=max_lon,
-                        maximum_latitude=max_lat,
-                        coordinates_selection_method='inside',
-                        start_datetime=start_datetime, 
-                        end_datetime=end_datetime,
-                        output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
-                        overwrite=overwrite
-                        # output_directory = "./-" # default is current directory
-                        )                
+            copernicusmarine_subset_filename = outdir / filename        
+            if not copernicusmarine_subset_filename.is_file():
+            # --- Subset dataset
+            # copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+            # copernicusmarine.subset(
+            #         dataset_id='cmems_mod_glo_wav_my_0.2deg_PT3H-i',
+            #         variables=variables.keys(),
+            #         minimum_longitude=min_lon,
+            #         minimum_latitude=min_lat,
+            #         maximum_longitude=max_lon,
+            #         maximum_latitude=max_lat,
+            #         coordinates_selection_method='inside',
+            #         start_datetime=start_datetime, 
+            #         end_datetime=end_datetime,
+            #         output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+            #         overwrite=overwrite
+            #         # output_directory = "./-" # default is current directory
+            #         )
+                try:
+                    filename = (
+                        f"cmems_mod_glo_wav_my_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+                        f"_N={min_lat:1.2f}_{max_lat:1.2f}"
+                        f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
+                    )
+                    copernicusmarine_subset_filename = outdir / filename        
+                    if not copernicusmarine_subset_filename.is_file():
+                        # --- Subset dataset
+                        copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                        copernicusmarine.subset(
+                            dataset_id='cmems_mod_glo_wav_my_0.2deg_PT3H-i',
+                            variables=variables.keys(),
+                            minimum_longitude=min_lon,
+                            minimum_latitude=min_lat,
+                            maximum_longitude=max_lon,
+                            maximum_latitude=max_lat,
+                            coordinates_selection_method='inside',
+                            start_datetime=start_datetime, 
+                            end_datetime=end_datetime,
+                            output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                            overwrite=overwrite
+                            # output_directory = "./-" # default is current directory
+                            )
+                except: 
+                    print('subsetting iterim product ... ')
+                    filename = (
+                        f"cmems_mod_glo_wav_myint_0.2deg_PT3H-i_subset_E={min_lon:1.2f}_{max_lon:1.2f}"
+                        f"_N={min_lat:1.2f}_{max_lat:1.2f}"
+                        f"_time={start_datetime.strftime('%Y%m%d')}_{end_datetime.strftime('%Y%m%d')}.nc"
+                    )
+                    copernicusmarine_subset_filename = outdir / filename        
+                    if not copernicusmarine_subset_filename.is_file():
+                        # --- Subset dataset
+                        copernicusmarine.login(username=self.username,password=self.password,force_overwrite=True)
+                        copernicusmarine.subset(
+                            dataset_id='cmems_mod_glo_wav_myint_0.2deg_PT3H-i',
+                            variables=variables.keys(),
+                            minimum_longitude=min_lon,
+                            minimum_latitude=min_lat,
+                            maximum_longitude=max_lon,
+                            maximum_latitude=max_lat,
+                            coordinates_selection_method='inside',
+                            start_datetime=start_datetime, 
+                            end_datetime=end_datetime,
+                            output_filename = copernicusmarine_subset_filename, # if extension is .zarr, file is downloaded in Zarr format 
+                            overwrite=overwrite
+                            # output_directory = "./-" # default is current directory
+                            )                
         elif self.iboundformat == 6:
 
             raise('not implemented yet')
@@ -227,11 +251,42 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
             
         return copernicusmarine_subset_filename
 
-    def format_GLOBAL_MULTIYEAR_WAV_001_032(self,fname:pathlib.Path):
+    def format_GLOBAL_MULTIYEAR_WAV_001_032(self,
+                                            fname:pathlib.Path,
+                                            start_datetime: datetime,
+                                            end_datetime: datetime,
+                                            bbox,
+                                            bbox_buffer = 0.5
+                                            ):
         
         # --- Reformat Dataset
-        ds = xr.open_dataset(fname)
-        
+        if isinstance(fname, (list, os.PathLike)):
+            ds = xr.open_mfdataset(fname)
+        else:
+            ds = xr.open_dataset(fname)
+
+        if start_datetime is not None and end_datetime is not None:        
+            try:
+                ds = ds.sel(time=slice(start_datetime, end_datetime))
+            except:
+                print('assuming tzinfo=None')
+                start_datetime = start_datetime.replace(tzinfo=None) # could also be timezone.utc
+                end_datetime = end_datetime.replace(tzinfo=None)
+                ds = ds.sel(time=slice(start_datetime, end_datetime))
+
+        if bbox is not None:
+            if isinstance(bbox,list):
+                ds = ds.sel(
+                    longitude=slice(bbox[0]-bbox_buffer,bbox[2]+bbox_buffer),
+                    latitude=slice(bbox[1]-bbox_buffer,bbox[3]+bbox_buffer)
+                    )
+            else:
+                ds = ds.sel(
+                    longitude= slice(bbox.xmin-bbox_buffer,bbox.xmax+bbox_buffer),
+                    latitude=slice(bbox.ymin-bbox_buffer,bbox.ymax+bbox_buffer)
+                    )
+
+
         # Set time to Julian Days since base date of 1990-01-01
         base_date_str = '1990-01-01 00:00:00'
         base_datetime64 = np.datetime64(base_date_str) # if this throws an error, try using: np.datetime64(start_datetime)
@@ -307,7 +362,7 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
             # Drop tp (not needed for WWM)
             ds = ds.drop_vars("tp")
 
-            self.WWM_IBOUNDFORMAT_3 = WWM_IBOUNDFORMAT_3(ds=ds)
+            self.ds = ds
 
         elif self.iboundformat == 6:
 
@@ -359,9 +414,17 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
             rnday: Union[float, int, timedelta] = None,
             end_datetime: datetime = None,
             overwrite: bool = True, # TODO: add error catching here (always overwrites!)
-            bbox = None
+            bbox = None,
+            bbox_buffer = 0.5
             ):
         
+        if start_datetime is None:
+                start_datetime = self.ds.time.isel(time=0).value
+        elif end_datetime is None and rnday is not None:
+            end_datetime = start_datetime + rnday
+        elif rnday is None:
+            rnday = end_datetime - start_datetime
+
         if self.filepath is None:
             copernicusmarine_subset_filename = self.download_GLOBAL_MULTIYEAR_WAV_001_032(
                 outdir=outdir,
@@ -371,12 +434,22 @@ class GLOBAL_MULTIYEAR_WAV_001_032(WWM_IBOUNDFORMAT_3):
                 bbox = bbox,
                 overwrite = False,
                 )
+            bbox = None # drop bbox since it was applied above
         else:
             copernicusmarine_subset_filename = self.filepath
 
-        self.format_GLOBAL_MULTIYEAR_WAV_001_032(copernicusmarine_subset_filename)
+        self.format_GLOBAL_MULTIYEAR_WAV_001_032(
+            copernicusmarine_subset_filename,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            bbox=bbox,
+            bbox_buffer=bbox_buffer
+            )
 
-        self.WWM_IBOUNDFORMAT_3.write(outdir=outdir,overwrite=overwrite)
+        WWM_IBOUNDFORMAT_3(ds=self.ds).write(
+            outdir=outdir,
+            overwrite=overwrite,
+            )
         
 # class GLOBAL_MULTIYEAR_WAV_001_032_Directional(WWM_IBOUNDFORMAT_6):
 

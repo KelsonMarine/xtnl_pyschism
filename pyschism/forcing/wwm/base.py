@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import xarray as xr
 import scipy.optimize
 import warnings
-
+import numpy as np
 
 # ModelForcing is the base class.
 # waves is an abstract subclass of ModelForcing.
@@ -157,9 +157,9 @@ class WWM_IBOUNDFORMAT_3(WWM):
     def write(
             self, 
             outdir: Union[str, os.PathLike], 
-            start_datetime: datetime = None,
-            rnday: timedelta = None,
-            end_datetime: datetime = None,
+            start_time: Union[np.ndarray,int,float] = None,
+            rnday:  Union[np.ndarray,int,float] = None,
+            end_time:  Union[np.ndarray,int,float] = None,
             bbox = None,
             overwrite: bool = True):
         """
@@ -183,18 +183,20 @@ class WWM_IBOUNDFORMAT_3(WWM):
                 f.write(filename + "\n") 
 
         # Subset ds based on optional inputs
-        if start_datetime is None and end_datetime is None and rnday is None:
+        if start_time is None and end_time is None and rnday is None:
             ds = self.ds
-        else:
-            if start_datetime is None:
-                start_datetime = self.ds.time.isel(time=0).value
-            elif end_datetime is None and rnday is not None:
-                end_datetime = start_datetime + rnday
+        else: # Slice in time
+            if start_time is None:
+                start_time = self.ds.time.isel(time=0).value
+            elif end_time is None and rnday is not None:
+                end_time = start_time + rnday
+            elif rnday is None:
+                rnday = end_time - start_time
 
-            assert (end_datetime == start_datetime + rnday)
+            assert (end_time == start_time + rnday)
 
-            # Slice in time
-            ds = ds.sel(time=slice(start_datetime, end_datetime))
+            assert (isinstance(type(self.ds.time.values), np.ndarray))
+            ds = self.ds.sel(time=slice(start_time, end_time))
 
         # Slice in space
         if bbox is not None:

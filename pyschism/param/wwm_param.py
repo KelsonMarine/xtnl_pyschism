@@ -78,11 +78,11 @@ class WWM_Param:
 
         # Patch the main namelist for each provided section
         for section, value in provided_args.items():
-            if not isinstance(value, f90nml.namelist.Namelist):
-                value = f90nml.namelist.Namelist(value)
-            self.nml.patch(value)
+            # if not isinstance(value, f90nml.namelist.Namelist):
+            #     value = f90nml.namelist.Namelist(value)
+            self.nml[section].update(value)
 
-        # clear unused or out-of-date sections
+        # unused?
         self.nml.patch({'station':{}})
         self.nml.patch({'wind':{}})
         self.nml.patch({'curr':{}})
@@ -198,16 +198,14 @@ class WWM_Param:
 
             # Create the patch value for this section
             val = {
-                section: {
                     'begtc': begtc,  # Expected format: yyyymmdd.hhmmssg
                     'deltc': dt_val,  # dt in seconds
                     'unitc': 'sec',
                     'endtc': endtc   # Expected format: yyyymmdd.hhmmss
                 }
-            }
 
             print(f"Patching {section} time variables: {val}")
-            self.nml.patch(val)
+            self.nml[section].update(val)
             
         return self
         

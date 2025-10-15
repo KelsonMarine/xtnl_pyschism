@@ -189,6 +189,8 @@ class WWM_IBOUNDFORMAT_3(WWM):
             if start_time is None:
                 start_time = self.ds.time.isel(time=0).value
             elif end_time is None and rnday is not None:
+                if not isinstance(rnday,timedelta):
+                    rnday = timedelta(days=rnday)
                 end_time = start_time + rnday
             elif rnday is None:
                 rnday = end_time - start_time

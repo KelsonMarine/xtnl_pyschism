@@ -283,7 +283,8 @@ class BaseComponent(ABC):
             level: int,
             overwrite: bool = False, 
             start_date: datetime = None,
-            rnday: Union[float, int, timedelta] = None
+            rnday: Union[float, int, timedelta] = None,
+            bbox = None
               ):
 
         assert level in [1, 2]
@@ -309,6 +310,50 @@ class BaseComponent(ABC):
         # base date used in netcdf
         nc_start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone)
                 
+        # get lon / lat coords with bbox 
+        variable = getattr(self, self.var_types[0]) # use first var_type as 'driver' var for dimensions and lon lat time
+        lon = variable.nx_grids[0]
+        lat = variable.ny_grids[0] 
+        nx_grid_1 = variable.nx_grids[0].shape[1]
+        ny_grid_0 = variable.ny_grids[0].shape[0]
+
+        if bbox is not None:
+            # lat_indices = np.where((lat >= bbox.ymin-0.5) & (lat <= bbox.ymax+0.5))[0]
+            # lon_indices = np.where((lon >= bbox.xmin-0.5) & (lon <= bbox.xmax+0.5))[0]
+
+            lon2d = lon.array
+            lat2d = lat.array
+
+            lat_ok = np.ma.filled(            # <- function, not method
+                (lat2d >= bbox.ymin - 0.1) & (lat2d <= bbox.ymax + 0.1),
+                False
+            )
+            lon_ok = np.ma.filled(
+                (lon2d >= bbox.xmin - 0.1) & (lon2d <= bbox.xmax + 0.1),
+                False
+            )
+
+            mask = lat_ok & lon_ok
+            iy, ix = np.where(mask)
+            iy_min, iy_max, ix_min, ix_max = iy.min(), iy.max(), ix.min(), ix.max()
+            if ix.max() < lon.shape[1]:
+                ix_max = ix.max()+1
+            if ix.min() > lon.shape[1]: 
+                ix_min = max(ix.min()-1,0)
+            if iy.max() < lat.shape[0]:
+                iy_max = iy.max()+1
+            if ix.min() > lat.shape[0]: 
+                iy_min = max(iy.min()-1,0)
+            
+            # index of rectangular slice
+            iy_s, ix_s = slice(iy_min, iy_max), slice(ix_min, ix_max)  
+
+            lon = lon[iy_s,ix_s]
+            lat = lat[iy_s,ix_s]
+            nx_grid_1 = lon.shape[1]
+            ny_grid_0 = lat.shape[0]
+
+
         for i, field in enumerate(getattr(self,self.var_types[0]).get_fields(start_date, rnday)):
             
             filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
@@ -329,14 +374,12 @@ class BaseComponent(ABC):
                 time_in_days_since_nc_start_date = [
                         (t - nc_start_date) / timedelta(days=1) for t in stack_datetime_list
                     ]
-                time_in_days_since_nc_start_date = np.asarray(time_in_days_since_nc_start_date, dtype='f8')
+                time_in_days_since_nc_start_date = np.array(time_in_days_since_nc_start_date,dtype='f8')
 
                 # mask time dimension based on start_date and end_date
                 tarr = np.array(stack_datetime_list, dtype='datetime64[ns]')
                 time_mask = (tarr >= np.datetime64(start_date)) & (tarr <= np.datetime64(end_date))
                 ntime = time_in_days_since_nc_start_date[time_mask].size
-
-                variable = getattr(self, self.var_types[0]) # use first var_type as 'driver' var for dimensions and lon lat time
 
                 print(f'    writing: {filename}')
                 with Dataset(outdir / filename, 'w',format='NETCDF3_CLASSIC') as dst:
@@ -344,8 +387,8 @@ class BaseComponent(ABC):
                     dst.setncatts({"Conventions": "CF-1.0"})
 
                     # dimensions
-                    dst.createDimension('nx_grid',variable.nx_grids[0].shape[1])
-                    dst.createDimension('ny_grid',variable.ny_grids[0].shape[0])
+                    dst.createDimension('nx_grid',nx_grid_1)
+                    dst.createDimension('ny_grid',ny_grid_0)
                     dst.createDimension('time',None)
                     # variables
                     # lon
@@ -353,13 +396,13 @@ class BaseComponent(ABC):
                     dst['lon'].long_name = "Longitude"
                     dst['lon'].standard_name = "longitude"
                     dst['lon'].units = "degrees_east"
-                    dst['lon'][:] = variable.nx_grids[0]
+                    dst['lon'][:] = lon
                     # lat
                     dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
                     dst['lat'].long_name = "Latitude"
                     dst['lat'].standard_name = "latitude"
                     dst['lat'].units = "degrees_north"
-                    dst['lat'][:] = variable.ny_grids[0]
+                    dst['lat'][:] = lat
 
                     dst.createVariable('time', 'f8', ('time',)) # changed from f4 for more precision
                     dst['time'].long_name = 'Time'
@@ -421,7 +464,10 @@ class BaseComponent(ABC):
                         for j, keep in enumerate(time_mask):
                             if not keep:
                                 continue
-                            arr2d = var_field_i.data[j, :, :].array
+                            if bbox is None:
+                                arr2d = var_field_i.data[j, :, :].array 
+                            else:
+                                arr2d = var_field_i.data[j, iy_s, ix_s].array  # use bbox derived slices for lat, lon
                             vout[k, :, :] = arr2d
                             k += 1
 
@@ -602,22 +648,22 @@ class SfluxDataset:
         outdir = pathlib.Path(outdir)
         if outdir.name != 'sflux':
             outdir /= 'sflux'
-        outdir.mkdir(exist_ok=True)
+        outdir.mkdir(exist_ok=True,parents=True)
 
         if hasattr(self, 'air'):
             if self.air is not None:
                 if air is True:
-                    self.air.write(outdir, level, overwrite, start_date, rnday)
+                    self.air.write(outdir, level, overwrite, start_date, rnday, bbox)
 
         if hasattr(self, 'prc'):
             if self.prc is not None:
-                if rad is True:
-                    self.prc.write(outdir, level, overwrite, start_date, rnday)
+                if prc is True:
+                    self.prc.write(outdir, level, overwrite, start_date, rnday, bbox)
 
         if hasattr(self, 'rad'):
             if self.rad is not None:
                 if rad is True:
-                    self.rad.write(outdir, level, overwrite, start_date, rnday)
+                    self.rad.write(outdir, level, overwrite, start_date, rnday, bbox)
 
     @property
     def timevector(self):

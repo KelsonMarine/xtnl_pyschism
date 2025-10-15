@@ -115,6 +115,133 @@ class Fgrid(Gr3):
             picks3 = np.intersect1d(picks, picks2)
             self.values[picks3] = self.values[picks3] + value
 
+    @classmethod
+    def phi_to_fgrid(cls,
+                    hgrid: Gr3,
+                    lon: np.ndarray, 
+                    lat: np.ndarray, 
+                    phi: np.ndarray,
+                    out="z0",              # "z0" or "Cd" (inferred if called from subclass)
+                    method="nearest",      # "nearest" or "idw"
+                    k=8,                   # neighbors for IDW
+                    power=2.0,             # IDW power
+                    ks_factor=2.5,         # k_s ≈ ks_factor * d50
+                    z0_clip=(1e-6, 1e-2),  # meters
+                    kappa=0.41,            # von Kármán
+                    hmin=1.0,              # min depth for Cd (m)
+                    cd_clip=(1e-4, 5e-2),  # plausible Cd range
+                    ):
+        """
+        Map scattered (lon, lat, phi) to mesh nodes and compute z0 or Cd.
+
+        Parameters
+        ----------
+        lon, lat, phi : 1D arrays
+            Scattered points in degrees (lon, lat) and Krumbein phi.
+            phi relates to grain size via D_mm = 2^(-phi).
+        out : {"z0","Cd"}
+            Which field to return. If return_both=True, returns (z0, Cd).
+        method : {"nearest","idw"}
+            Interpolation method from points to nodes (projected XY).
+        k : int
+            Number of neighbors for IDW (ignored for nearest).
+        power : float
+            IDW power (2.0 typical).
+        ks_factor : float
+            Nikuradse sand-grain roughness multiplier on d50 (k_s = ks_factor*d50).
+        z0_clip : (float, float)
+            Min/max clip for z0 in meters.
+        kappa : float
+            von Kármán constant.
+        hmin : float
+            Minimum depth used when converting z0toCd to avoid singularities.
+        cd_clip : (float, float)
+            Min/max clip for Cd.
+        return_both : bool
+            If True, return (z0_nodes, Cd_nodes) regardless of `out`.
+
+        Returns
+        -------
+        out_arr : np.ndarray
+            Node-wise array of z0 (m) or Cd (dimensionless).
+            If return_both=True, returns (z0_nodes, Cd_nodes).
+        """
+        from scipy.spatial import cKDTree
+        from pyproj import CRS, Transformer
+
+        if 'RoughnessLength' in cls.__name__ or issubclass(cls, RoughnessLength):
+            out = "z0"
+        elif 'DragCoefficient' in cls.__name__ or issubclass(cls, DragCoefficient):
+            out = "Cd"
+
+        obj = cls.constant(hgrid, np.nan)
+
+        # ---- 0) Pull nodes from hgrid ----
+        coords = hgrid.coords
+        assert (hgrid.crs == 'EPGS:4326') or (hgrid.crs == 'WGS84')
+        depth = hgrid.values
+
+        # ---- 1) Convert phi to d50 (m) to k_s to z0 (m) ----
+        lon = np.asarray(lon)
+        lat = np.asarray(lat)
+        phi = np.asarray(phi)
+
+        ok = np.isfinite(lon) & np.isfinite(lat) & np.isfinite(phi)
+        if not np.any(ok):
+            raise ValueError("No valid (lon, lat, phi) samples provided.")
+        lonp, latp, phip = lon[ok], lat[ok], phi[ok]
+
+        d_mm = 2.0 ** (-phip)           # Krumbein phi to mm
+        d50  = d_mm / 1000.0            # mm to meters
+        ks   = ks_factor * d50          # Nikuradse roughness
+        z0_pts = ks / 30.0              # hydraulic roughness length
+        z0_pts = np.clip(z0_pts, *z0_clip)
+
+        # ---- 2) Project (lon,lat) to local metric coordinates (m) ----
+        coords0 = float(np.nanmean(coords[:,0]))
+        coords1 = float(np.nanmean(coords[:,1]))
+        wgs84 = CRS.from_epsg(4326)
+
+         # Azimuthal Equidistant projection centred on origin point
+        aeqd  = CRS.from_proj4(f"+proj=aeqd +lat_0={coords1} +lon_0={coords0} +datum=WGS84 +units=m +no_defs")
+        to_xy = Transformer.from_crs(wgs84, aeqd, always_xy=True).transform
+
+        xp, yp = to_xy(lonp,      latp)
+        xn, yn = to_xy(coords[:,0], coords[:,1])
+
+        # ---- 3) Interpolate z0 from points to nodes ----
+        tree = cKDTree(np.c_[xp, yp])
+        if method == "nearest":
+            _, idx = tree.query(np.c_[xn, yn], k=1)
+            z0_nodes = z0_pts[idx]
+        elif method == "idw":
+            k_eff = min(k, len(z0_pts))
+            dist, idx = tree.query(np.c_[xn, yn], k=k_eff)
+            # Ensure 2D arrays
+            dist = np.atleast_2d(dist)
+            idx  = np.atleast_2d(idx)
+            w = 1.0 / np.maximum(dist, 1e-12) ** power
+            z0_nodes = (w * z0_pts[idx]).sum(axis=1) / w.sum(axis=1)
+        else:
+            raise ValueError("method must be 'nearest' or 'idw'.")
+
+        z0_nodes = np.clip(z0_nodes, *z0_clip)
+
+        # ---- 4) z0 to Cd using local depth ----
+        h = np.maximum(np.asarray(depth), float(hmin))
+        # Avoid log singularities
+        ratio = np.maximum(h / np.maximum(z0_nodes, z0_clip[0]), 1.0000001)
+        Cd_nodes = (kappa / np.log(ratio)) ** 2
+        Cd_nodes = np.clip(Cd_nodes, *cd_clip)
+
+        if out == "z0":
+            obj.values[:] = z0_nodes
+        elif out == "Cd":
+            obj.values[:] = Cd_nodes
+
+        return obj
+        
+
 class ManningsN(Fgrid):
     """  Class for representing Manning's n values.  """
 

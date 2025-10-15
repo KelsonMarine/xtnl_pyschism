@@ -77,20 +77,37 @@ def get_database(date, Bbox=None):
         raise ValueError(f'No data fro {date}!')
     return database
 
-def get_idxs(date, database, bbox, lonc=None, latc=None):
+def get_idxs(date, database, bbox, lonc=None, latc=None, resource=None):
 
-    if date >= datetime.utcnow():
-        date2 = datetime.utcnow() - timedelta(days=1)
-        baseurl = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[0:1:-1],lon[0:1:-1],time[0:1:-1]'
+
+    if resource is not None:
+        try:
+            ds = Dataset(resource) # data from DownloadHycom
+            lonvar='xlon'
+            latvar='ylat'
+        except:
+            print(f'hycom2schism.py failed to open resource {resource} ... downloading from tds.hycom.org/thredds ...')
+            download_resource=True
     else:
-        baseurl=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[0:1:-1],lon[0:1:-1],time[0:1:-1],depth[0:1:-1]'
+        download_resource=True
 
-    ds=Dataset(baseurl)
+    if download_resource:
+
+        if date >= datetime.utcnow():
+            date2 = datetime.utcnow() - timedelta(days=1)
+            baseurl = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[0:1:-1],lon[0:1:-1],time[0:1:-1]'
+        else:
+            baseurl=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[0:1:-1],lon[0:1:-1],time[0:1:-1],depth[0:1:-1]'
+
+        ds=Dataset(baseurl)
+        lonvar='lon'
+        latvar='lat'
+
     time1=ds['time']
     times=nc.num2date(time1,units=time1.units,only_use_cftime_datetimes=False)
 
-    lon=ds['lon'][:]
-    lat=ds['lat'][:]
+    lon=ds[lonvar][:]
+    lat=ds[latvar][:]
     dep=ds['depth'][:]
 
     #check if hycom's lon is the same range as schism's
@@ -234,7 +251,7 @@ def ConvertTemp(salt, temp, dep):
 
 class OpenBoundaryInventory:
 
-    def __init__(self, hgrid, vgrid=None, ocean_bnd_ids: list = [0]):
+    def __init__(self, hgrid, vgrid=None, ocean_bnd_ids: list = [0], resource=None):
         self.hgrid = hgrid
         if vgrid is None:
             print('OpenBoundaryInventory using default Vgrid')
@@ -242,8 +259,8 @@ class OpenBoundaryInventory:
         elif isinstance(vgrid, os.PathLike) or  isinstance(vgrid, str):
             vgrid = Vgrid.open(vgrid)
         self.vgrid = vgrid
-        
         self.ocean_bnd_ids = ocean_bnd_ids
+        self.resource = resource
 
     def fetch_data(self, 
                    outdir: Union[str, os.PathLike], 
@@ -453,30 +470,40 @@ class OpenBoundaryInventory:
                 ymin, ymax = np.min(blat), np.max(blat)
                 bbox = Bbox.from_extents(xmin, ymin, xmax, ymax)
 
-                time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=blonc, latc=blatc)
+                time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=blonc, latc=blatc, resource=self.resource)
 
-                if date >= datetime.utcnow():
-                    date2 = datetime.utcnow() - timedelta(days=1)
-                    url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
-                        f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
-                        f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
-                        f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-
+                if self.resource is not None:
+                    try:
+                        ds=Dataset(self.resource)
+                    except:
+                        use_database = True
                 else:
-                    url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
-                        f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
-                        f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                        f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-                #logger.info(url)
+                    use_database = True
+                
+                if use_database:
+                    if date >= datetime.utcnow():
+                        date2 = datetime.utcnow() - timedelta(days=1)
+                        url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
+                            f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
+                            f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
+                            f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
 
-                ds=Dataset(url)
+                    else:
+                        url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
+                            f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
+                            f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                            f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
+                    #logger.info(url)
+
+                    ds=Dataset(url)
+
                 dep=ds['depth'][:]
 
                 logger.info(f'****Interpolation starts for boundary {ibnd}****')
@@ -855,7 +882,7 @@ class DownloadHycom:
         for i, date in enumerate(timevector):
             database=get_database(date)
             logger.info(f'Fetching data for {date} from database {database}')
-
+            print(f'Fetching data for {date} from database {database}')
             time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, isLonSame = get_idxs(date, database, self.bbox)
 
             url_ssh = f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:{sub_sample}:{lat_idx2}],' + \
@@ -866,7 +893,8 @@ class DownloadHycom:
                 f'water_temp[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}],' + \
                 f'salinity[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}]'
 
-            foutname = f'hycom_{date.strftime("%Y%m%d")}.nc'
+            foutname = pathlib.Path(outdir) / f'hycom_{date.strftime("%Y%m%d")}.nc'
+
             if fmt == 'schism':
                 #foutname = f'TS_{i+1}.nc'
                 logger.info(f'filename is {foutname}')

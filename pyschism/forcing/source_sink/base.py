@@ -9,6 +9,7 @@ from typing import Union
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import numpy as np
+import xarray as xr
 import pandas as pd
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, LineString, MultiPoint
@@ -17,7 +18,6 @@ from pyproj import CRS, Transformer
 import pytz
 from scipy.interpolate import interp1d
 from shapely import ops
-from shapely.geometry import Point
 
 from pyschism import dates
 from pyschism.mesh.base import Gr3
@@ -44,10 +44,10 @@ class SourceSinkDataset:
             for elements in self.data.values():
                 for element_id in elements.keys():
                     unique_elements.add(element_id)
-            # self._elements = list(
-            #     map(str, sorted(list(map(int, unique_elements)))))
             self._elements = list(
-                map(int, sorted(list(map(int, unique_elements)))))
+                map(str, sorted(list(map(int, unique_elements)))))
+            # self._elements = list(
+            #     map(int, sorted(list(map(int, unique_elements)))))
         return self._elements
 
     @property
@@ -130,8 +130,13 @@ class TimeHistoryFile(ABC):
 
         data = []
         for i, row in enumerate(ts_matrix):
-            relative_time = (
-                self.dataset.timevector[i] - self.start_date).total_seconds()
+            try:
+                relative_time = (self.dataset.timevector[i] - self.start_date).total_seconds()
+            except:
+                if i==1:
+                    print('[WARNING] Assumming dataset.timevector timezone = pytz.utc')
+                relative_time = (dates.localize_datetime(self.dataset.timevector[i]).astimezone(pytz.utc) - self.start_date).total_seconds()
+
             if relative_time < 0:
                 continue
             data.append(" ".join([
@@ -144,13 +149,6 @@ class TimeHistoryFile(ABC):
 
     def get_element_timeseries(self, element_id):
         values = []
-
-        if isinstance(element_id, str):
-            try:
-                element_id = int(element_id)  # Convert to integer
-            except ValueError:
-                raise ValueError(f"Cannot convert '{element_id}' to an integer.")
-            
         for time in self.dataset.timevector:
             values.append(self.dataset.data[time].get(
                 element_id, {}).get('flow', np.nan))
@@ -245,6 +243,7 @@ class SourceSinkWriter:
 
 
 class SourceSink:
+
     def __init__(self, sources: Sources = None, sinks: Sinks = None, data: dict = None):
         """
         Initialize SourceSink object with Sources and Sinks objects. 
@@ -252,19 +251,15 @@ class SourceSink:
         __init__ method created by Kelson Marine
         """
         if sources is not None:
-            self.sources = sources  
-        # else:
-        #     self.sources = Sources()
-
+            self._sources = sources
         if sinks is not None:
-            self.sinks = sinks  
-        # else:
-        #     self.sinks()
+            self._sinks = sinks
 
-        if sinks is not None:
-            self._data = data  
-        # else:
-        #     self._data = {}
+        # initialize backing fields
+        self._data = data or {}
+        self._df = None
+        self._start_date = None
+        self._rnday = None
 
 
     def __add__(self, other):
@@ -452,27 +447,21 @@ class SourceSink:
         elif isinstance(vsource, str):
             fname = vsource
         if vsource is not False:
-            Vsource(sources, self.start_date, self.rnday,
-                    fname).write(path, overwrite)
+            Vsource(sources, self.start_date, self.rnday,fname).write(path, overwrite)
 
         if msource is True:
             fname = "msource.th"
         elif isinstance(msource, str):
             fname = msource
         if msource is not False:
-            Msource(sources, self.start_date, self.rnday,
-                    fname).write(
-                        path, 
-                        overwrite,
-                        )
+            Msource(sources, self.start_date, self.rnday,fname).write(path, overwrite, )
 
         if vsink is True:
             fname = "vsink.th"
         elif isinstance(vsink, str):
             fname = vsink
         if vsink is not False:
-            Vsink(sinks, self.start_date, self.rnday,
-                  fname).write(path, overwrite)
+            Vsink(sinks, self.start_date, self.rnday,fname).write(path, overwrite)
 
     @property
     def sources(self):
@@ -576,27 +565,26 @@ class SourceSink:
     @property
     def data(self):
         return self._data
-    
+
     @data.setter
     def data(self, data: dict = None):
-        if data is not None:
-            self._data = data
+        # set data and invalidate cached df
+        self._data = data or {}
+        self._df = None
 
     @property
     def df(self):
-        if not hasattr(self, "_df"):
-            _data = []
+        if self._df is None:
+            rows = []
             for time, element_data in self._data.items():
-                for element_id, data in element_data.items():
-                    _data.append(
-                        {"time": time, "element_id": element_id, **data})
-            self._df = pd.DataFrame(_data)
+                for element_id, d in element_data.items():
+                    rows.append({"time": time, "element_id": element_id, **d})
+            self._df = pd.DataFrame(rows)
         return self._df
-    
-    @data.setter
+
+    @df.setter
     def df(self, df: pd.DataFrame = None):
-        if df is not None:
-            self._df = df        
+        self._df = df if df is not None else None      
 
 @lru_cache(maxsize=None)
 def get_circle_of_radius(lon, lat, radius):
@@ -612,66 +600,272 @@ def get_circle_of_radius(lon, lat, radius):
 
 
 class HGridElementPairings:
-    def __init__(self, hgrid: Union[Hgrid, Gr3], lon: Union[list,np.array], lat: Union[list, np.array], workers: int = -1, depth_threshold: float = None):
+    def __init__(self, hgrid: Hgrid, ds: xr.Dataset=None, lon: Union[list,np.array]=None, lat: Union[list, np.array]=None, workers: int = -1, depth_threshold: float = None,buffer:float=0.1):
         """
         Maps (lon, lat) coordinates to the nearest hgrid element ID.
         
         Parameters:
-        hgrid : Gr3, the hgrid object representing the model grid.
+        hgrid : Hgrid object representing the model grid.
+        ds : xr dataset with source, time dims/coords and lon, lat, Q, temp, salt data vars
         lon : array-like, Longitudes of the points to be mapped.
         lat : array-like, Latitudes of the points to be mapped.
         workers : int, optional, Number of workers for cKDTree query (default is -1, meaning auto).
+        depth_threshold : float (>0), depth threshold to map hgrid source elements to
+        buffer : float(>0), buffer distance in units of hgrid to buffer hull of hgrid to for subsetting (lon,lat) source points 
         """
-        self._hgrid = hgrid
-        self.lon = np.asarray(lon)
-        self.lat = np.asarray(lat)
-        
-        # Generate element centroids KDTree
-        centroids = []
-        element_ids = []
-        for element_id, element in hgrid.elements.elements.items():
-            node_ind = list(map(hgrid.nodes.get_index_by_id, element))
 
-            # apply depth threshold: 
-            # an element is wet if all of its nodes and sides are wet, and is dry if any of its nodes or sides becomes dry.
-            # A node/side is wet iff (if and only if) at least 1 of its surrounding element is wet.
-            if depth_threshold is not None:
-                if any(hgrid.nodes.values[node_ind] > depth_threshold):  
-                    continue 
-            centroid = LineString(
-                hgrid.nodes.coord[node_ind]
-            ).centroid
-            centroids.append((centroid.x, centroid.y))
-            element_ids.append(element_id)
+        # hull: shapely Polygon from hgrid
+        H = hgrid.hull().iloc[0].geometry.buffer(buffer)
+        self._hgrid = hgrid
+        if ds is not None:
+            points = [Point(x, y) for x, y in zip(ds.lon.values, ds.lat.values)]
+            mask = np.fromiter((H.covers(pt) for pt in points), dtype=bool, count=len(points))
+            self.ds = ds.isel(source=mask)
+            self.source = self.ds.source.values
+            self.source_lon=self.ds.lon.values
+            self.source_lat=self.ds.lat.values
+        elif lon is not None and lat is not None:
+            points = [Point(x, y) for x, y in zip(np.asarray(lon), np.asarray(lat))]
+            mask = np.fromiter((H.covers(pt) for pt in points), dtype=bool, count=len(points))
+            source = np.arange(lon.ravel().shape[0])
+            self.ds = None
+            self.source = source[mask]
+            self.source_lon=lon[mask]
+            self.source_lat=lat[mask]
+
+        # Generate element centroids KDTree
+        # NOTE! Could use hgrid.elements.compute_centroid() to get lon,lat,depth of element ...
+        # ... but this may miss a dry node (and thus element) ... so use for loop
+        print('Pairing source elements ... ')
+
+        # get elements in mesh hull
+        x_centr, y_centr, dp_centr = hgrid.elements.compute_centroid()
         
+
+        # --- get element id
+        # similar to .triangle property for a mesh with all triangles 
+        ar = hgrid.elements.array # 0-based index of element
+        element_idx = np.arange(ar.shape[0])
+
+        # for element_id, element in hgrid.elements.elements.items(): # --> element id to node id dict map
+        #     node_ind = list(map(hgrid.nodes.get_index_by_id, element))
+        
+        # --- apply depth threshold: 
+        # an element is wet if all of its nodes and sides are wet, and is dry if any of its nodes or sides becomes dry.
+        # A node/side is wet iff (if and only if) at least 1 of its surrounding element is wet.
+        depth_mask = np.all(-hgrid.nodes.values[ar]>depth_threshold,axis=1) 
+        centroids = np.column_stack((x_centr[depth_mask], y_centr[depth_mask]))
+
         self.tree = cKDTree(centroids)
-        self.element_ids = np.array(element_ids)
-        
+        element_idx = element_idx[depth_mask]
+        element_id = np.array(element_idx + 1,dtype=str)
+        element_centroid_lon=x_centr[depth_mask]
+        element_centroid_lat=y_centr[depth_mask]
+        element_mean_depth=dp_centr[depth_mask]
+
         # Find nearest elements for given lon/lat points
-        # map each (lon, lat) point to the nearest element using KDTree."""
-        coords = np.vstack((self.lon, self.lat)).T
-        _, idxs = self.tree.query(coords, workers=workers)
-        self.idxs = idxs
-        self.mapped_elements = self.element_ids[idxs]
+        coords = np.vstack((self.source_lon, self.source_lat)).T
+        _, idxs = self.tree.query(coords, workers=workers) # idxs = linear index to masked element centroid lon/lat corresponding to self.source
+
+        assert len(idxs) == len(self.source)
+
+        # self._idxs = idxs # note: index to map lon, lat to element centroids
+        # self.map = {'source':self.ds.source.values, 'hgrid_element_id':self.element_ids[idxs]}
+        self.map = dict(zip(self.ds.source.values, zip(element_idx[idxs], element_id[idxs])))
+        self.element_idx= element_idx[idxs] 
+        self.element_id= element_id[idxs] 
+        self.element_centroid_lon = element_centroid_lon[idxs]
+        self.element_centroid_lat = element_centroid_lat[idxs]
+        self.element_mean_depth = element_mean_depth[idxs]
+
+        # # debug
+
+        # centroids = []
+        # element_ids = []
+        # element_centroid_lon=[]
+        # element_centroid_lat=[]
+        # element_mean_depth=[]
+        # for element_id, element_nodes in hgrid.elements.elements.items():
+        #     #node_idx = hgrid.nodes.get_index_by_id(element_nodes)
+        #     node_idx = list(map(hgrid.nodes.get_index_by_id, element_nodes))
+        #     # apply depth threshold: 
+        #     # an element is wet if all of its nodes and sides are wet, and is dry if any of its nodes or sides becomes dry.
+        #     # A node/side is wet iff (if and only if) at least 1 of its surrounding element is wet.
+        #     node_depths = -hgrid.nodes.values[node_idx] # -1 * hgrid.node.values s.t. (z, negative down) --> (depth, positive down)
+        #     if np.any(node_depths < depth_threshold): # dont use this, it is redundant: or not np.all(H.covers([Point(x, y) for x, y in zip(hgrid.nodes.coords[node_ind,0], hgrid.nodes.coords[node_ind,1])]):  
+        #         # do not consider element that in cKDTree nn search
+        #         continue
+        #     centroid = LineString(hgrid.nodes.coord[node_idx]).centroid
+        #     centroids.append((centroid.x, centroid.y))
+        #     element_ids.append(element_id)
+        #     element_centroid_lon.append(centroid.x)
+        #     element_centroid_lat.append(centroid.y)    
+        #     element_mean_depth.append(np.mean(node_depths))    
+        
+        
+        # element_ids = np.array(element_ids)
+        # element_centroid_lon=np.array(element_centroid_lon)
+        # element_centroid_lat=np.array(element_centroid_lat)
+        # element_mean_depth=np.array(element_mean_depth)
     
+        # tree = cKDTree(centroids)
+        # coords = np.vstack((self.source_lon, self.source_lat)).T
+        # _, idxs = tree.query(coords, workers=workers) # idxs = linear index to masked element centroid lon/lat corresponding to self.source
+        # assert len(idxs) == len(self.source)
+        # self.bmap = dict(zip(self.ds.source.values, zip(np.array(element_ids[idxs],dtype=int)-1,element_ids[idxs])))
+        # self.belement_id=element_ids[idxs] 
+        # self.belement_centroid_lon = element_centroid_lon[idxs]
+        # self.belement_centroid_lat = element_centroid_lat[idxs]
+        # self.belement_mean_depth = element_mean_depth[idxs]
+
     def get_mapped_elements(self):
         """Returns a dictionary mapping (lon, lat) tuples to element IDs."""
-        return {(lon, lat): elem_id for (lon, lat), elem_id in zip(zip(self.lon, self.lat), self.mapped_elements)}
+        return {elem_id: (lon, lat, depth) for (lon, lat, depth), elem_id in zip(zip(self.element_centroid_lon, self.element_centroid_lat,self.element_mean_depth), self.element_id)}
     
     def save_json(self, filename):
         """Saves the mappings to a JSON file."""
         import json
         with open(filename, "w") as f:
             json.dump(self.get_mapped_elements(), f)
+
+    def to_dict(self, start_date: datetime, rnday:timedelta, as_climatology=True):
+        
+        start_date = dates.localize_datetime(start_date).astimezone(pytz.utc)
+
+        if "temp" not in self.ds:
+            self.ds["temp"] = xr.full_like(self.ds["Q"], -9999.0).assign_attrs(
+                long_name="temperature", units="degC"
+            )
+
+        if "salt" not in self.ds:
+            self.ds["salt"] = xr.full_like(self.ds["Q"], 0).assign_attrs(
+                long_name="salinity", units="psu"
+            )
+        if as_climatology:
+            # Loop over time steps 
+            print('ds to Sources ... ')
+            data = {}
+            for i, dt in enumerate( [start_date + timedelta(days=i) for i in range(rnday.days+2)] ):
+                day_of_year = int(dt.strftime('%j'))
+                q_data = self.ds['Q'].sel(day=day_of_year).values
+                temp_data = self.ds['temp'].sel(day=day_of_year).values
+                salt_data = self.ds['salt'].sel(day=day_of_year).values
+
+                element_data = {}
+                for i in self.map.keys():
+                    eid = self.map[i][1]
+                    assert isinstance(eid,str)
+                    element_data[eid] = {
+                            "flow": q_data[i],  # Direct access
+                            "temperature": temp_data[i], # ambient value in model = -9999.0
+                            "salinity": salt_data[i] # psu, ambient value in model = -9999.0
+                        }
+
+                data[dt] = element_data
+                
+        return data
+
+    def to_SourceSink(self, start_date: datetime, rnday:timedelta, as_climatology=True):
+
+        if "temp" not in self.ds:
+            self.ds["temp"] = xr.full_like(self.ds["Q"], -9999.0).assign_attrs(
+                long_name="temperature", units="degC"
+            )
+
+        if "salt" not in self.ds:
+            self.ds["salt"] = xr.full_like(self.ds["Q"], 0).assign_attrs(
+                long_name="salinity", units="psu"
+            )
+        if as_climatology:
+            ss = SourceSink()
+            for i, dt in enumerate( [start_date + timedelta(days=i) for i in range(rnday.days+2)] ):
+                day_of_year = int(dt.strftime('%j'))
+                flow_data = self.ds['Q'].sel(day=day_of_year).values
+                temp_data = self.ds['temp'].sel(day=day_of_year).values
+                salt_data = self.ds['salt'].sel(day=day_of_year).values
+
+                element_data = {}
+                for i in self.map.keys():
+                    eid = self.map[i][1]
+                    assert isinstance(eid,str)
+                    ss.add_data(
+                        time = dt,
+                        element_id=eid,
+                        flow=flow_data[i], # m3/s, positive=flow entering, negative=flow leaving
+                        temperature=temp_data[i],   # ambient value in model = -9999.0
+                        salinity=salt_data[i]       # psu, ambient value in model = -9999.0
+                    )
+            return ss
     
-    def make_plot(self,ax = None,figsize=(10,10)):
+    def make_plot(self,ax = None,figsize=(10,10),show_text_labels=False):
         """Plots the mapped points and hgrid elements for verification."""
-        gdf = self.hgrid.elements.gdf
+       
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
         self.hgrid.triplot(axes=ax,label="hgrid")
-        ax.scatter(self.lon, self.lat, marker="x", color="red", label="Mapped Points")
-        plt.legend()
+
+        gdf = self.hgrid.elements.gdf
+        for id in self.element_id: gdf[gdf.id == id].geometry.plot(ax=ax)
+
+        ax.scatter(self.source_lon, self.source_lat, marker=".", color="cyan", label="Original Source Points")
+        cs = ax.scatter(
+            self.element_centroid_lon,
+            self.element_centroid_lat,
+            s=5,
+            c=np.asarray(self.element_mean_depth, dtype=float),
+            marker="o",
+            label="Mapped Element Centroid to Source Points",
+        )
+        fig.colorbar(cs, ax=ax, label="Mean Element Depth")
+        # Label elements
+        if show_text_labels:
+            for x, y, id in zip(self.element_centroid_lon, self.element_centroid_lat, self.element_id):
+                ax.text(x, y, id, fontsize=6, ha="center", va="top")
+            # for element_id, element in self.hgrid.elements.elements.items():
+            #     node_ind = list(map(self.hgrid.nodes.get_index_by_id, element))
+            #     x = np.mean(self.hgrid.coords[node_ind,0])
+            #     y = np.mean(self.hgrid.coords[node_ind,1])
+            #     ax.text(x, y, str(element_id), fontsize=6, ha="center", va="center",color='r')
+
+        # Draw connectors from each source point to its mapped centroid
+        for x0, y0, x1, y1 in zip(self.source_lon, self.source_lat, self.element_centroid_lon, self.element_centroid_lat):
+            ax.plot([x0, x1], [y0, y1], linestyle="-", color="lightgrey",linewidth=0.8, alpha=0.7)
+
+        # # debug
+        # if debug:
+        #     ax.scatter(self.source_lon, self.source_lat, marker=".", color="cyan", label="Original Source Points")
+        #     cs = ax.scatter(
+        #         self.belement_centroid_lon,
+        #         self.belement_centroid_lat,
+        #         s=5,
+        #         c=np.asarray(self.element_mean_depth, dtype=float),
+        #         marker="s",
+        #         label="db Mapped Element Centroid to Source Points",
+        #     )
+        #     # Label elements
+        #     if show_text_labels:
+        #         for x, y, id in zip(self.belement_centroid_lon, self.belement_centroid_lat, self.belement_id):
+        #             ax.text(x, y, id, fontsize=6, ha="center", va="bottom", color='r')
+        
+        #     # for element_id, element_node_id in self.hgrid.elements.elements.items():
+        #     #     node_ind = list(map(self.hgrid.nodes.get_index_by_id, element_node_id))
+        #     #     x = np.mean(self.hgrid.coords[node_ind,0])
+        #     #     y = np.mean(self.hgrid.coords[node_ind,1])
+        #     #     ax.text(x, y, str(element_id), fontsize=4, ha="center", va="center",color='b')
+
+        # # Draw connectors from each source point to its mapped centroid
+        # for x0, y0, x1, y1 in zip(self.source_lon, self.source_lat, self.belement_centroid_lon, self.belement_centroid_lat):
+        #     ax.plot([x0, x1], [y0, y1], linestyle="-", color="darkgrey",linewidth=0.8, alpha=0.7)
+        # # end debug
+
+        if not show_text_labels:
+            plt.legend()
+        bbox=self.hgrid.bbox
+        minx,miny = bbox.min
+        maxx,maxy = bbox.max
+        ax.set_xlim([minx, maxx])
+        ax.set_ylim([miny, maxy])
+        ax.set_aspect("equal", adjustable="box")
         plt.show()
 
     @property

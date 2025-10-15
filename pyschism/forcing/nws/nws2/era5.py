@@ -142,6 +142,7 @@ class ERA5DataInventory:
         self._bbox = bbox
 
         if datadir is None:
+
             if tmpdir is not None:
                 self._tmpdir_path = pathlib.Path(tmpdir)
                 self._tmpdir_obj = None  # No TemporaryDirectory created
@@ -150,12 +151,21 @@ class ERA5DataInventory:
                 self._tmpdir_path = pathlib.Path(self._tmpdir_obj.name)
 
             self._download_and_process_data()
+            self._files = None
+
         else: 
             # use 
             #  start_date: datetime = None, datetime.datetime
             #  rnday: Union[float, timedelta] = 4,
-
-            self._tmpdir_path = pathlib.Path(datadir)
+            if isinstance(datadir,pathlib.Path):
+                self._tmpdir_path = datadir
+            elif isinstance(datadir,list):
+                if isinstance(datadir[0],pathlib.Path):
+                    self._tmpdir_path = datadir[0].parent
+                    self._files = datadir
+                else: 
+                    self._tmpdir_path = pathlib.Path(datadir[0])
+                    self._files = [pathlib.Path(f) for f in datadir]
 
 
     def _download_and_process_data(self):
@@ -216,7 +226,10 @@ class ERA5DataInventory:
 
     @property
     def files(self):
-        return sorted(self.tmpdir.glob('era5_*.nc'))
+        if self._files is None:
+            return sorted(self.tmpdir.glob(f'era5_*.nc'))
+        else:
+            return self._files
 
     @property
     def lon(self):
@@ -245,7 +258,7 @@ class ERA5DataInventory:
 def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc, output_interval, OUTDIR, level: int=1):
     rt=pd.to_datetime(str(date))
     idx=np.where(rt == timevector)[0].item()
-    times=[i/24 for i in np.arange(0, 25, output_interval)]
+    times=[i/24 for i in np.arange(0, 24, output_interval)]
 
     if air is True:
         with Dataset(OUTDIR / f"sflux_air_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
@@ -416,7 +429,7 @@ class ERA5(SfluxDataset):
         self.air = None
         self.prc = None
         self.rad = None
-        self.datadir = None
+        self.datadir = None 
 
     def write(
         self,
@@ -431,14 +444,10 @@ class ERA5(SfluxDataset):
         overwrite: bool=False,
         output_interval: int = 1,
         tmpdir = None,
-        datadir = None
     ):
         self.start_date=start_date
         self.rnday=rnday
         end_date=self.start_date+timedelta(self.rnday)
-
-        if datadir is not None:
-            self.datadir = datadir
 
         if self.start_date.hour != 0:
             raise ValueError(f"Start datetime hour different than 0.\

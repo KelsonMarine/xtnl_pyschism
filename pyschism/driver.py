@@ -68,7 +68,7 @@ class ModelForcings:
                 self.nws.write(
                     output_directory,
                     start_date=driver.param.opt.start_date,
-                    rnday=driver.param.core.rnday, 
+                    rnday=driver.param.core.rnday+1, 
                     overwrite=overwrite,
                     bbox=driver.config.hgrid.get_bbox(output_type="bbox"),
                     air=True,
@@ -88,15 +88,15 @@ class ModelForcings:
                     output_directory,
                     driver.config.hgrid,
                     start_date=driver.param.opt.start_date,
-                    rnday=driver.param.core.rnday,
+                    rnday=driver.param.core.rnday+1,
                     overwrite=overwrite,
                 )
             elif isinstance(self.source_sink,SourceSink):
                 self.source_sink.start_date = driver.param.opt.start_date
-                self.source_sink.rnday = driver.param.core.rnday
+                self.source_sink.rnday = driver.param.core.rnday+1
                 self.source_sink.write(
-                    path= output_directory,
-                    overwrite=overwrite,
+                    path = output_directory,
+                    overwrite = overwrite,
                     msource = True,
                     vsource = True,
                     vsink = True,
@@ -113,7 +113,7 @@ class ModelForcings:
                 self.ocean.fetch_data(
                     outdir=output_directory,
                     start_date=driver.param.opt.start_date,
-                    rnday=timedelta(days=driver.param.core.rnday),
+                    rnday=timedelta(days=driver.param.core.rnday+1),
                     elev2D=True, 
                     TS=True, 
                     UV=True,
@@ -126,7 +126,7 @@ class ModelForcings:
 
         if self.waves is not None:
             if isinstance(self.waves, WWM_IBOUNDFORMAT_3):
-                print('\nWriting ModelForcings.waves ...')
+                print('\nWriting ModelForcings.waves (iboundformat=3) ...')
                 self.waves.write(
                     outdir=output_directory,
                     start_datetime=driver.param.opt.start_date,
@@ -143,7 +143,7 @@ class ModelForcings:
                     nml.uppercase = True
                     os.remove(wwminput_nml)
                     f90nml.write(nml, wwminput_nml,force=False,sort=False)
-                    print(f'WWM_IBOUNDFORMAT_1.write() patched {wwminput_nml}')
+                    print(f'WWM_IBOUNDFORMAT_1.write() patched {wwminput_nml} (iboundformat=1)')
 
 
 class Gr3FieldTypes(Enum):
@@ -196,7 +196,7 @@ class ModelDriver:
         if isinstance(rnday,timedelta):
                 rnday = rnday / timedelta(days=1)    
         if isinstance(dt,timedelta):
-                dt = dt.total_seconds
+                dt = dt.total_seconds()
         if (ihfskip is None) and (nspool is None):
             # These two flags control the global netcdf outputs. 
             # Output is done every nspool steps, and a new output stack is opened every ihfskip steps. 
@@ -323,44 +323,45 @@ class ModelDriver:
             if wwm_param is None:
 
                 # set some defaults ; patch with WWM_Param
-                wwm_proc = {'proc': {
+                wwm_proc = {
                     'lsphe':True if self.param.opt.ics == 2 else False,    # sphericial coords ... True if self.param.opt.ics == 2 else False
-                    'lnautin':True } # nautical convention ... True
-                            }
+                    'lnautin':True 
+                    } # nautical convention ... True
+                            
                 
-                wwm_grid = {'grid':{
+                wwm_grid = {
                     'mdc': 36,  # number of wave dir bins
                     'msc' : 30, # number of wave freq bins
                     'igridtype' : 3,
-                }}
+                }
                 
                 
                 if isinstance(self.config.waves,WWM_IBOUNDFORMAT_1):
 
-                    wwm_init = {'init':{
+                    wwm_init = {
                         'lhotr': False if hotstart is None else True,
                         'linid': False, 
                         'initstyle':1, # 1 - Parametric Jonswap
-                    }}
+                    }
 
-                    wwm_bouc = {'bouc':{
+                    wwm_bouc = {
                         'lbcse': True,      # The wave boundary data is time dependent
                         'lbinter' : False,  # Do interpolation in time if LBCSE=T
                         'lbcwa' : True,     # Parametric Wave Spectra
                         'lbcsp' : False,    # Specify non-parametric wave spectra in FILEWAVE
                         'linhom' : False,    # Non Uniform wave b.c. in space
                         'iboundformat':1,   # 1 ~ WWM 
-                        'fileboudn' : 'wwmbnd.gr3', # Boundary file defining boundary and Neumann nodes
-                    }}
+                        'filebound' : 'wwmbnd.gr3', # Boundary file defining boundary and Neumann nodes
+                    }
 
                 if isinstance(self.config.waves,WWM_IBOUNDFORMAT_3):
-                    wwm_init = {'init':{
+                    wwm_init = {
                         'lhotr': False if hotstart is None else True,
                         'linid': True, 
                         'initstyle':2, # read from netcdf when iboundformat=3
-                    }}
+                    }
 
-                    wwm_bouc = {'bouc':{
+                    wwm_bouc ={
                         'lbcse': True,
                         'lbinter' : True,
                         'lbcwa' : False,
@@ -369,11 +370,9 @@ class ModelDriver:
                         'lbsp1d' : False,
                         'lbsp2d' : False,
                         'iboundformat':3, 
-                        'fileboudn' : 'wwmbnd.gr3',
-                        'filewave' : 'bndfiles.dat'
-                    }}
-
-
+                        'filebound' : 'wwmbnd.gr3',
+                        'filewave' : 'wwmbndfiles.dat'
+                    }
 
                 self.wwm_param = WWM_Param(
                     template=wwm_param_template,
@@ -490,7 +489,7 @@ class ModelDriver:
         fgrid=True,
         param=True,
         wwm_param=True,
-        wwmhgrid=True,
+        # wwmhgrid=True,
         wwmbnd=True,
         use_param_template=False,
         # use_wwm_param_template=False
@@ -522,10 +521,15 @@ class ModelDriver:
         if not (self.outdir / "outputs").exists():
             (self.outdir / "outputs").mkdir(parents=True, exist_ok=overwrite)
 
-        
+        # Write ModelForcing objects    
+        print('writing model forcing files:')
+        self.config.forcings.write(
+            self, output_directory, overwrite,
+        )
 
         if hgrid is not False:
             hgrid = "hgrid.gr3" if hgrid is True else hgrid
+            print('writing hgrid ... ')
             self.config.hgrid.write(self.outdir / hgrid, overwrite)
             if self.param.opt.ics == 2:
                 _original_dir = os.getcwd()
@@ -539,6 +543,7 @@ class ModelDriver:
 
         if vgrid is not False:
             vgrid = "vgrid.in" if vgrid is True else vgrid
+            print('writing vgrid ... ')
             self.config.vgrid.write(self.outdir / vgrid, overwrite)
 
         if fgrid is not False:
@@ -552,17 +557,19 @@ class ModelDriver:
             )
 
         if (self.config.waves is not None): # or (wwm_param is not False):
-            wwm_param = "wwminput.nml" if wwm_param is True else param
             self.wwm_param.write(
-                filename=self.outdir / wwm_param, force=True if overwrite else False, sort=False # consider re-defining .write method so it is like Param.write()
+                filename=self.outdir /  "wwminput.nml", 
+                force=True if overwrite else False, 
+                sort=False # consider re-defining .write method so it is like Param.write()
                 )
 
         def obj_write(var, obj, default_filename, overwrite):
+            print('writing ', default_filename)
             if var is not False and obj is not None:
                 obj.write(
                     self.outdir / default_filename if var is True else var, overwrite
                 )
-
+    
         obj_write(albedo, self.config.albedo, "albedo.gr3", overwrite)
         obj_write(diffmin, self.config.diffmin, "diffmin.gr3", overwrite)
         obj_write(diffmax, self.config.diffmax, "diffmax.gr3", overwrite)
@@ -576,13 +583,15 @@ class ModelDriver:
         obj_write(elev_ic, self.elev_ic, "elev.ic", overwrite)
         obj_write(stations, self.stations, "station.in", overwrite)
         if (self.config.waves is not None):
-            os.symlink(self.outdir / 'hgrid.gr3',self.outdir / 'hgrid_WWM.gr3', False)
+            os.chdir(self.outdir)  # pushd
+            os.symlink(self.outdir / 'hgrid.gr3','hgrid_WWM.gr3', False)
             obj_write(wwmbnd, self.config.wwmbnd, "wwmbnd.gr3", overwrite)
 
-        # Write ModelForcing objects    
-        self.config.forcings.write(
-            self, output_directory, overwrite,
-        )
+        # # Write ModelForcing objects    
+        # print('writing model forcing files:')
+        # self.config.forcings.write(
+        #     self, output_directory, overwrite,
+        # )
 
         MakefileDriver(self.server_config, hotstart=self.hotstart).write(
             self.outdir / "Makefile", overwrite

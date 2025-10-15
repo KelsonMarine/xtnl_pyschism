@@ -217,4 +217,4 @@ class CORE:
     def defaults(self):
         if self.template is None:
             return f90nml.read(pathlib.Path(__file__).parent / 'param.nml')["core"]
-        return f90nml.read(self.template)['core']
+        return self._template

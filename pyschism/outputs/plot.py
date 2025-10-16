@@ -284,12 +284,15 @@ class PlotOutputCombined:
 
             Writer = mpl_animation.FFMpegWriter
             writer = Writer(fps=fps, bitrate=4000, codec="libx264", extra_args=["-pix_fmt", "yuv420p"])
+            start_datetime=np.datetime_as_string(self.ds.time.isel(time=1).values, unit='m').replace(' ','_')
+            end_datetime=np.datetime_as_string(self.ds.time.isel(time=-1).values, unit='m').replace(' ','_')
+            outfile=savedir / pathlib.Path(f'{self.name}_{variable}_{start_datetime}_{end_datetime}.{fileformat}')
             anim.save(
-                savedir / pathlib.Path(f'{self.name}_{variable}.{fileformat}'),
+                outfile,
                 writer=writer,
                 dpi=dpi
             )
-            print('Animation saved to: ', savedir / pathlib.Path(f'{self.name}_{variable}.{fileformat}'))
+            print('Animation saved to: ', outfile'))
             
 
         if show:

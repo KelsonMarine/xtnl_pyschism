@@ -76,7 +76,8 @@ class PlotOutputCombined:
             cax=None, # optional args if called from PlotOutputCombined.animation.animate method
             fig=None,
             ax=None,
-            triangulation=None
+            triangulation=None,
+            show_cbar=True
              ):
         
         # --- define mesh triangulation
@@ -153,19 +154,18 @@ class PlotOutputCombined:
         ax.set_xlabel('Longitude [deg E]')
         ax.set_ylabel('Latitude [deg N]')
 
-        m = plt.cm.ScalarMappable(cmap=cmap)
-        m.set_array(val)
-        m.set_clim(vmin, vmax)
-        if cax is None:
-            cbar = fig.colorbar(m, ax=ax, format='%.2f', boundaries=np.linspace(vmin, vmax, levels), pad=0.02, shrink=0.5)
-        else:
-            cbar = fig.colorbar(m, cax=cax, format='%.2f', boundaries=np.linspace(vmin, vmax, levels), pad=0.02, shrink=0.5)
-        label = variable if not unit else f"{variable} [{unit}]"
-        cbar.set_label(label)
+        if show_cbar:
+            m = plt.cm.ScalarMappable(cmap=cmap)
+            m.set_array(val)
+            m.set_clim(vmin, vmax)
+            if cax is None:
+                cbar = fig.colorbar(m, ax=ax, format='%.2f', boundaries=np.linspace(vmin, vmax, levels), pad=0.02, shrink=0.5)
+            else:
+                cbar = fig.colorbar(m, cax=cax, format='%.2f', boundaries=np.linspace(vmin, vmax, levels), pad=0.02, shrink=0.5)
+            label = variable if not unit else f"{variable} [{unit}]"
+            cbar.set_label(label)
 
-        # Format the datetime as a string (drop miliseconds)
-        timestamp = np.datetime_as_string(self.ds['time'].isel(time=index).values, unit='m')
-        ax.set_title(timestamp)
+        ax.set_title(f"{variable} | {np.datetime_as_string(self.ds.time.isel(time=index).values, unit='m')}")
         if show:
             plt.show()
 
@@ -194,7 +194,8 @@ class PlotOutputCombined:
             vmax=None,
             add_basemap=False,
             ctx_opts={'crs':'EPSG:4326','source':contextily.providers.Esri.WorldImagery,'zoom':'auto'},
-            plot_vector_field=False,
+            show_vector_field=False,
+            show_cbar=True,
         ):
 
         # -------------------------
@@ -327,18 +328,16 @@ class PlotOutputCombined:
                 zorder=10
             )
 
-            if variable == 'depthAverageVelMag' and 'depthAverageVelX' in self.ds and 'depthAverageVelY' in self.ds and plot_vector_field:
+            if variable == 'depthAverageVelMag' and 'depthAverageVelX' in self.ds and 'depthAverageVelY' in self.ds and show_vector_field:
                 quiver=draw_vector_field(index,first=first)
 
             # Colorbar: create once, then just update its mappable
-            time=np.datetime_as_string(self.ds.time.isel(time=index).values, unit='m')
-            if first:
+            if first and show_cbar:
                 cbar = fig.colorbar(contourf, ax=ax, format='%.2f', boundaries=np.linspace(vmin, vmax, levels), pad=0.02, shrink=0.5)
                 label = variable if not unit else f"{variable} [{unit}]"
                 cbar.set_label(label)
-                ax.set_title(f"{variable} | {time}")
-            else:
-                ax.set_title(f"{variable} | {time}")
+
+            ax.set_title(f"{variable} | {np.datetime_as_string(self.ds.time.isel(time=index).values, unit='m')}")
 
             return contourf.collections
 

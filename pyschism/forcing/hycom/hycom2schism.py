@@ -14,7 +14,7 @@ import scipy as sp
 import requests
 #from numba import jit, prange
 import netCDF4 as nc
-from netCDF4 import Dataset
+from netCDF4 import Dataset, MFDataset
 from matplotlib.transforms import Bbox
 import seawater as sw
 import xarray as xr
@@ -82,9 +82,13 @@ def get_idxs(date, database, bbox, lonc=None, latc=None, resource=None):
 
     if resource is not None:
         try:
-            ds = Dataset(resource) # data from DownloadHycom
+            if isinstance(resource,str) or  isinstance(resource,pathlib.Path):
+                ds = Dataset(resource)
+            else:
+                ds = MFDataset(resource) # data from DownloadHycom
             lonvar='xlon'
             latvar='ylat'
+            download_resource=False
         except:
             print(f'hycom2schism.py failed to open resource {resource} ... downloading from tds.hycom.org/thredds ...')
             download_resource=True
@@ -289,10 +293,6 @@ class OpenBoundaryInventory:
         #Get open boundary
         gdf=self.hgrid.boundaries.open.copy()
         opbd=[]
-            # for boundary in gdf.itertuples():
-            #     opbd.extend(list(boundary.indexes))     
-       
-
         if ocean_bnd_ids is None:
             ocean_bnd_ids = list(range(gdf.shape[0]))
         for ibnd in ocean_bnd_ids:
@@ -435,8 +435,8 @@ class OpenBoundaryInventory:
             it = it0 + it1
 
             database=get_database(date)
-            logger.info(f'Fetching data for {date} from database {database}')
-            print(f'Fetching data for {date} from database {database}')
+            logger.info(f'Data for {date} from database {database}')
+            print(f'Data for {date} from database {database}')
 
             #loop over each open boundary
             ind1 = 0
@@ -474,7 +474,10 @@ class OpenBoundaryInventory:
 
                 if self.resource is not None:
                     try:
-                        ds=Dataset(self.resource)
+                        if isinstance(self.resource,str) or  isinstance(self.resource,pathlib.Path):
+                            ds = Dataset(self.resource)
+                        else:
+                            ds = MFDataset(self.resource) 
                     except:
                         use_database = True
                 else:
@@ -953,7 +956,7 @@ class DownloadHycom:
                 #    f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
 
                 #foutname = f'hycom_{date.strftime("%Y%m%d")}.nc'
-                ds = xr.open_dataset(url)
+                ds = xr.open_dataset(url_ssh)
                 ds.to_netcdf(foutname, 'w')
 
                 ds.close()

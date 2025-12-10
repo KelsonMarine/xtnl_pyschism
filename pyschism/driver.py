@@ -258,8 +258,8 @@ class ModelDriver:
             self.param.opt.hmin_man = self.config.fgrid.hmin_man
 
         elif self.config.fgrid.nchi == 1:
-            self.param.opt.dbz_min = self.config.fgrid.dbz_min
-            self.param.opt.dbz_decay = self.config.fgrid.dbz_decay
+            self.param.opt.dbz_min = self.config.fgrid.dzb_min
+            self.param.opt.dbz_decay = self.config.fgrid.dzb_decay
 
         self.param.schout.nhot_write = (
             self.param.core.ihfskip if nhot_write is None else nhot_write

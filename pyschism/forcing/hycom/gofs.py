@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 import logging
 from typing import Dict, Union
-
+import pathlib
 from matplotlib.transforms import Bbox
 import seawater as sw
 from netCDF4 import Dataset
@@ -215,6 +215,91 @@ class GOFSComponent(HycomComponent):
     ) -> Dict[datetime, Dataset]:
         return GofsDatasets(start_date, run_days, output_interval).datasets
 
+    def default_dst(self, hgrid, vgrid=None, outdir=pathlib.Path('./')) -> Dataset:
+
+        #create netcdf
+        nComp1=1
+        nComp2=2
+        one=1
+        gdf = hgrid.boundaries.open
+
+        ocean_bnd_ids = list(range(gdf.shape[0]))
+        opbd=[]
+        for ibnd in ocean_bnd_ids:
+            opbd.extend(list(gdf.iloc[ibnd].indexes))
+        nop = len(opbd)
+
+        if vgrid is not None:        
+            nvrt=vgrid.sigma.shape[1]
+
+        if isinstance(self,GOFSSalinity) or isinstance(self,GOFSTemperature) or isinstance(self,GOFSVelocity) and vgrid is None:
+            raise RuntimeError('vgrid as input required')
+
+        if isinstance(self,GOFSElevation):
+            #create netcdf
+            dst = Dataset(outdir / 'elev2D.th.nc', 'w', format='NETCDF4')
+            #dimensions
+            dst.createDimension('nopenBndNodes', nop)
+            dst.createDimension('one', one)
+            dst.createDimension('time', None)
+            dst.createDimension('nLevels', one)
+            dst.createDimension('nComponents', nComp1)
+
+            #variables
+            dst.createVariable('time_step', 'f', ('one',))
+            dst['time_step'][:] = 86400
+            dst.createVariable('time', 'f', ('time',))
+            dst.createVariable('time_series', 'f', ('time', 'nopenBndNodes', 'nLevels', 'nComponents'))
+
+        if isinstance(self, GOFSSalinity):
+            dst = Dataset(outdir / 'SAL_3D.th.nc', 'w', format='NETCDF4')
+            #dimensions
+            dst.createDimension('nopenBndNodes', nop)
+            dst.createDimension('one', one)
+            dst.createDimension('time', None)
+            dst.createDimension('nLevels', nvrt)
+            dst.createDimension('nComponents', nComp1)
+            #variables
+            dst.createVariable('time_step', 'f', ('one',))
+            dst['time_step'][:] = 86400
+
+            dst.createVariable('time', 'f', ('time',))
+
+            dst.createVariable('time_series', 'f', ('time', 'nopenBndNodes', 'nLevels', 'nComponents'))
+
+        if isinstance(self,GOFSTemperature):
+
+            dst = Dataset(outdir / 'TEM_3D.th.nc', 'w', format='NETCDF4')
+            #dimensions
+            dst.createDimension('nopenBndNodes', nop)
+            dst.createDimension('one', one)
+            dst.createDimension('time', None)
+            dst.createDimension('nLevels', nvrt)
+            dst.createDimension('nComponents', nComp1)
+            #variables
+            dst.createVariable('time_step', 'f', ('one',))
+            dst['time_step'][:] = 86400
+            dst.createVariable('time', 'f', ('time',))
+            dst.createVariable('time_series', 'f', ('time', 'nopenBndNodes', 'nLevels', 'nComponents'))
+
+        if isinstance(self,GOFSVelocity):
+            #timeseries_uv=np.zeros([ntimes,nop,nvrt,nComp2])
+            dst = Dataset(outdir / 'uv3D.th.nc', 'w', format='NETCDF4')
+            #dimensions
+            dst.createDimension('nopenBndNodes', nop)
+            dst.createDimension('one', one)
+            dst.createDimension('time', None)
+            dst.createDimension('nLevels', nvrt)
+            dst.createDimension('nComponents', nComp2)
+            #variables
+            dst.createVariable('time_step', 'f', ('one',))
+            dst['time_step'][:] = 86400
+
+            dst.createVariable('time', 'f', ('time',))
+            dst.createVariable('time_series', 'f', ('time', 'nopenBndNodes', 'nLevels', 'nComponents'))
+        return dst 
+
+
 def transform_ll_to_cpp(lon, lat, lonc=-77.07, latc=24.0):
     #lonc=(np.max(lon)+np.min(lon))/2.0
     print(f'lonc is {lonc}')
@@ -238,16 +323,22 @@ class GOFSElevation(GOFSComponent):
 
     def put_boundary_ncdata(
             self,
-            boundary,
-            dst,
+            hgrid,
             start_date,
             run_days,
+            dst: Dataset = None,
             overwrite=False,
             offset=0,
             output_interval=timedelta(hours=24),
             pixel_buffer=10,
-            progress_bar=True
+            progress_bar=True,
+            outdir=None
     ):
+
+        if dst is None:
+            dst = self.default_dst(hgrid,outdir=outdir)
+        boundary = hgrid.boundaries.open
+
         for i, (time, dataset) in enumerate(
             self.get_datasets(
                 start_date,
@@ -280,7 +371,7 @@ class GOFSElevation(GOFSComponent):
                 f'approximated as {ds_timevector[time_idx]} for '
                 f'boundary id={boundary.id}'
                 )
-            bounds = boundary.geometry.bounds
+            bounds = boundary.geometry.total_bounds # return array with [minx, miny, maxx, maxy] over full geo data frame
             dx = (dataset['lon'][-1] - dataset['lon'][0]) / len(dataset['lon'])
             dy = (dataset['lat'][-1] - dataset['lat'][0]) / len(dataset['lat'])
             bounds = (
@@ -322,7 +413,10 @@ class GOFSElevation(GOFSComponent):
             xi = xi.flatten()
             yi = yi.flatten()
             zi = zi.flatten()
-            xyq = np.array(boundary.geometry.coords)
+
+            # xyq = np.array(boundary.geometry.coords)
+            xyq = np.vstack([np.asarray(geom.coords) for geom in boundary.geometry])
+
             zq = griddata(
                 (xi, yi),
                 zi,
@@ -342,7 +436,9 @@ class GOFSElevation(GOFSComponent):
                 raise ValueError('Boundary contains NaNs.')
             print(f'the shape of zq is {len(zq)}, max zq is {np.max(zq)}, min zq is {np.min(zq)}')
             dst['time_series'][i, offset:offset+len(zq)] = zq
-
+            dst['time'][i] = i*86400.
+        dst['time_step'][:] = 86400
+        return dst
 
 class GOFSVelocity(GOFSComponent):
 
@@ -354,16 +450,19 @@ class GOFSVelocity(GOFSComponent):
             self,
             hgrid,
             vgrid,
-            boundary,
-            dst,
             start_date,
             run_days,
+            dst: Dataset = None,
             overwrite=False,
             offset=0,
             output_interval=timedelta(hours=24),
             pixel_buffer=10,
-            progress_bar=True
+            progress_bar=True,
+            outdir=None
     ):
+        if dst is None:
+            dst = self.default_dst(hgrid,vgrid=vgrid,outdir=outdir)
+        boundary = hgrid.boundaries.open
 
         for i, (time, dataset) in enumerate(
             self.get_datasets(
@@ -453,9 +552,17 @@ class GOFSVelocity(GOFSComponent):
             else:
                 raise NotImplementedError('vgrid.ivcor!=1')
 
-            xy = hgrid.get_xy(crs='epsg:4326')
-            lonb = xy[boundary.indexes, 0]
-            latb = xy[boundary.indexes, 1]
+            # xy = hgrid.get_xy(crs='epsg:4326')
+            # lonb = xy[boundary.indexes, 0]
+            # latb = xy[boundary.indexes, 1]
+
+            # lists of indices from gdf into one 1D numpy array
+            all_idx = np.concatenate(boundary["indexes"].to_numpy()).astype(int)
+
+            xy = hgrid.get_xy(crs="epsg:4326")
+            lonb = xy[all_idx, 0]
+            latb = xy[all_idx, 1]
+
             xb, yb = transform_ll_to_cpp(lonb, latb)
             bx = np.tile(xb, [bz.shape[1],1]).T
             by = np.tile(yb, [bz.shape[1],1]).T
@@ -523,6 +630,9 @@ class GOFSVelocity(GOFSComponent):
 
             dst['time_series'][i, offset:offset+bz.shape[0], :, 0] = u_interp.reshape(bz.shape)
             dst['time_series'][i, offset:offset+bz.shape[0], :, 1] = v_interp.reshape(bz.shape)
+            dst['time'][i] = i*86400.
+        dst['time_step'][:] = 86400
+        return dst
 
 
 class GOFSTemperature(GOFSComponent):
@@ -535,16 +645,19 @@ class GOFSTemperature(GOFSComponent):
             self,
             hgrid,
             vgrid,
-            boundary,
-            dst,
             start_date,
             run_days,
+            dst: Dataset = None,
             overwrite=False,
             offset=0,
             output_interval=timedelta(hours=24),
             pixel_buffer=10,
-            progress_bar=True
+            progress_bar=True,
+            outdir=None
     ):
+        if dst is None:
+            dst = self.default_dst(hgrid,vgrid=vgrid,outdir=outdir)
+        boundary = hgrid.boundaries.open
 
         for i, (time, dataset) in enumerate(
             self.get_datasets(
@@ -641,9 +754,17 @@ class GOFSTemperature(GOFSComponent):
             else:
                 raise NotImplementedError('vgrid.ivcor!=1')
 
-            xy = hgrid.get_xy(crs='epsg:4326')
-            lonb = xy[boundary.indexes, 0]
-            latb = xy[boundary.indexes, 1]
+            # xy = hgrid.get_xy(crs='epsg:4326')
+            # lonb = xy[boundary.indexes, 0]
+            # latb = xy[boundary.indexes, 1]
+
+            # lists of indices from gdf into one 1D numpy array
+            all_idx = np.concatenate(boundary["indexes"].to_numpy()).astype(int)
+
+            xy = hgrid.get_xy(crs="epsg:4326")
+            lonb = xy[all_idx, 0]
+            latb = xy[all_idx, 1]
+
             xb, yb = transform_ll_to_cpp(lonb, latb)
             #bx = np.tile(xy[boundary.indexes, 0], [bz.shape[1],1])
             #by = np.tile(xy[boundary.indexes, 1], [bz.shape[1],1])
@@ -684,6 +805,9 @@ class GOFSTemperature(GOFSComponent):
                 raise ValueError('No boundary  temperature data for GOFS. '
                                  'Try increasing pixel_buffer argument.')
             dst['time_series'][i, offset:offset+bz.shape[0], :, :] = ptemp_interp.reshape(bz.shape)
+            dst['time'][i] = i*86400.
+        dst['time_step'][:] = 86400
+        return dst
 
 
 class GOFSSalinity(GOFSComponent):
@@ -696,17 +820,20 @@ class GOFSSalinity(GOFSComponent):
             self,
             hgrid,
             vgrid,
-            boundary,
-            dst,
             start_date,
             run_days,
+            dst: Dataset = None,
             overwrite=False,
             offset=0,
             output_interval=timedelta(hours=24),
             pixel_buffer=10,
-            progress_bar=True
+            progress_bar=True,
+            outdir=None
     ):
 
+        if dst is None:
+            dst = self.default_dst(hgrid,vgrid=vgrid,outdir=outdir)
+        boundary = hgrid.boundaries.open
         for i, (time, dataset) in enumerate(
             self.get_datasets(
                 start_date,
@@ -792,9 +919,17 @@ class GOFSSalinity(GOFSComponent):
             else:
                 raise NotImplementedError('vgrid.ivcor!=1')
 
-            xy = hgrid.get_xy(crs='epsg:4326')
-            lonb = xy[boundary.indexes, 0]
-            latb = xy[boundary.indexes, 1]
+            # xy = hgrid.get_xy(crs='epsg:4326')
+            # lonb = xy[boundary.indexes, 0]
+            # latb = xy[boundary.indexes, 1]
+
+            # lists of indices from gdf into one 1D numpy array
+            all_idx = np.concatenate(boundary["indexes"].to_numpy()).astype(int)
+
+            xy = hgrid.get_xy(crs="epsg:4326")
+            lonb = xy[all_idx, 0]
+            latb = xy[all_idx, 1]
+
             xb, yb = transform_ll_to_cpp(lonb, latb)
             bx = np.tile(xb, [bz.shape[1],1]).T
             by = np.tile(yb, [bz.shape[1],1]).T
@@ -832,6 +967,9 @@ class GOFSSalinity(GOFSComponent):
                 raise ValueError('No boundary  salt data for GOFS. '
                                  'Try increasing pixel_buffer argument.')
             dst['time_series'][i, offset:offset + bz.shape[0], :, :] = salt_interp.reshape(bz.shape)
+            dst['time'][i] = i*86400.
+        dst['time_step'][:] = 86400
+        return dst
 
 
 class GOFS(Hycom):
@@ -858,3 +996,85 @@ class GOFS(Hycom):
     @property
     def salinity(self) -> GOFSSalinity:
         return self._salinity
+    
+    def get_datasets(
+            self,
+            start_date: datetime,
+            run_days: Union[float, timedelta],
+            output_interval=timedelta(days=1)
+    ) -> Dict[datetime, Dataset]:
+        return GofsDatasets(start_date, run_days, output_interval).datasets
+
+    def put_boundary_ncdata(            
+            self,
+            hgrid,
+            vgrid,
+            start_date,
+            run_days,
+            dst: Dataset = None,
+            overwrite=False,
+            offset=0,
+            output_interval=timedelta(hours=24),
+            pixel_buffer=10,
+            progress_bar=True,
+            outdir=None
+    ):
+        
+        if outdir is not None:
+            outdir=pathlib.Path(outdir)
+            outdir.mkdir(exist_ok=True,parents=True)
+
+        self.elevation.put_boundary_ncdata(
+            hgrid=hgrid, 
+            start_date=start_date,
+            run_days=run_days,
+            dst=dst,
+            overwrite=overwrite,
+            offset=offset,
+            output_interval=output_interval,
+            pixel_buffer=pixel_buffer,
+            progress_bar=progress_bar,
+            outdir=outdir
+            )
+
+        self.salinity.put_boundary_ncdata(
+            hgrid=hgrid,
+            vgrid=vgrid,
+            start_date=start_date,
+            run_days=run_days,
+            dst=dst,
+            overwrite=overwrite,
+            offset=offset,
+            output_interval=output_interval,
+            pixel_buffer=pixel_buffer,
+            progress_bar=progress_bar,
+            outdir=outdir
+            )
+        
+        self.temperature.put_boundary_ncdata(
+            hgrid=hgrid,
+            vgrid=vgrid,
+            start_date=start_date,
+            run_days=run_days,
+            dst=dst,
+            overwrite=overwrite,
+            offset=offset,
+            output_interval=output_interval,
+            pixel_buffer=pixel_buffer,
+            progress_bar=progress_bar,
+            outdir=outdir
+            )
+        
+        self.velocity.put_boundary_ncdata(   
+            hgrid=hgrid,
+            vgrid=vgrid,
+            start_date=start_date,
+            run_days=run_days,
+            dst=dst,
+            overwrite=overwrite,
+            offset=offset,
+            output_interval=output_interval,
+            pixel_buffer=pixel_buffer,
+            progress_bar=progress_bar,
+            outdir=outdir
+            )

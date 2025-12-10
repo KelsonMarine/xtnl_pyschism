@@ -9,6 +9,8 @@ from shapely.geometry import Polygon, MultiPolygon, Point
 import geopandas as gpd
 
 from pyschism.mesh.base import Gr3
+from pyschism.mesh.hgrid import Hgrid
+from pyschism.mesh.vgrid import LSC2
 from pyschism.mesh.parsers import grd
 
 
@@ -116,29 +118,31 @@ class Fgrid(Gr3):
             self.values[picks3] = self.values[picks3] + value
 
     @classmethod
-    def phi_to_fgrid(cls,
-                    hgrid: Gr3,
-                    lon: np.ndarray, 
-                    lat: np.ndarray, 
-                    phi: np.ndarray,
-                    out="z0",              # "z0" or "Cd" (inferred if called from subclass)
-                    method="nearest",      # "nearest" or "idw"
-                    k=8,                   # neighbors for IDW
-                    power=2.0,             # IDW power
-                    ks_factor=2.5,         # k_s ≈ ks_factor * d50
-                    z0_clip=(1e-6, 1e-2),  # meters
-                    kappa=0.41,            # von Kármán
-                    hmin=1.0,              # min depth for Cd (m)
-                    cd_clip=(1e-4, 5e-2),  # plausible Cd range
+    def phi50_to_fgrid(cls,
+                    hgrid:Hgrid,
+                    lon:np.ndarray, 
+                    lat:np.ndarray, 
+                    phi50:np.ndarray,     # phi associated with median grain size
+                    out:str="z0",              # "z0" or "Cd" (inferred if called from subclass)
+                    method:str="nearest",      # "nearest" or "idw"
+                    k:int=8,                   # neighbors for IDW
+                    power:float=2.0,             # IDW power
+                    ks_factor:float=2.5,         # k_s ≈ ks_factor * d50
+                    z0_clip:tuple =(1e-6, 1e-2),  # meters
+                    z0_background:float = None,     # meters, option to define 'background' value
+                    vgrid: LSC2 = None, 
+                    kappa:float=0.41,            # von Kármán
+                    hmin:float=1.0,              # min depth for Cd (m)
+                    cd_clip:tuple=(1e-4, 5e-2),  # plausible Cd range
                     ):
         """
-        Map scattered (lon, lat, phi) to mesh nodes and compute z0 or Cd.
+        Map scattered (lon, lat, phi50) to mesh nodes and compute z0 or Cd.
 
         Parameters
         ----------
-        lon, lat, phi : 1D arrays
-            Scattered points in degrees (lon, lat) and Krumbein phi.
-            phi relates to grain size via D_mm = 2^(-phi).
+        lon, lat, phi50 : 1D arrays
+            Scattered points in degrees (lon, lat) and Krumbein phi50.
+            phi50 relates to median grain size D_50 in mm by D_50 = 2^(-phi50).
         out : {"z0","Cd"}
             Which field to return. If return_both=True, returns (z0, Cd).
         method : {"nearest","idw"}
@@ -154,17 +158,30 @@ class Fgrid(Gr3):
         kappa : float
             von Kármán constant.
         hmin : float
-            Minimum depth used when converting z0toCd to avoid singularities.
+            Minimum depth used when converting z0 to Cd to avoid singularities.
         cd_clip : (float, float)
             Min/max clip for Cd.
         return_both : bool
-            If True, return (z0_nodes, Cd_nodes) regardless of `out`.
+            If True, return (z0, Cd_nodes) regardless of `out`.
 
         Returns
         -------
         out_arr : np.ndarray
             Node-wise array of z0 (m) or Cd (dimensionless).
-            If return_both=True, returns (z0_nodes, Cd_nodes).
+            If return_both=True, returns (z0, Cd_nodes).
+
+
+        Note on ks_factor:
+
+        See Table 25 of https://www.hec.usace.army.mil/confluence/rasdocs/d2sd/ras2dsedtr/6.3/model-description/bedform-geometry-and-hydraulic-roughness/bottom-roughness
+            
+            ks = ks_factor * d50
+
+            Source  --> ks_factor 
+            ---------------------------
+            Meyer-Peter and Muller (1948) --> 1.0
+            Engelund and Hansen (1972), Nielsen (1992)--> 2.50
+            Strickler (1970) --> 3.3
         """
         from scipy.spatial import cKDTree
         from pyproj import CRS, Transformer
@@ -173,28 +190,28 @@ class Fgrid(Gr3):
             out = "z0"
         elif 'DragCoefficient' in cls.__name__ or issubclass(cls, DragCoefficient):
             out = "Cd"
+            assert(vgrid is not None, 'LSC2 vgrid required when out="Cd"')
 
-        obj = cls.constant(hgrid, np.nan)
+        obj = cls.constant(hgrid, np.nan if z0_background is None else z0_background)
 
         # ---- 0) Pull nodes from hgrid ----
         coords = hgrid.coords
         assert (hgrid.crs == 'EPGS:4326') or (hgrid.crs == 'WGS84')
-        depth = hgrid.values
 
-        # ---- 1) Convert phi to d50 (m) to k_s to z0 (m) ----
+        # ---- 1) Convert phi50 to d50 (m) to k_s to z0 (m) ----
         lon = np.asarray(lon)
         lat = np.asarray(lat)
-        phi = np.asarray(phi)
+        phi50 = np.asarray(phi50)
 
-        ok = np.isfinite(lon) & np.isfinite(lat) & np.isfinite(phi)
+        ok = np.isfinite(lon) & np.isfinite(lat) & np.isfinite(phi50)
         if not np.any(ok):
-            raise ValueError("No valid (lon, lat, phi) samples provided.")
-        lonp, latp, phip = lon[ok], lat[ok], phi[ok]
+            raise ValueError("No valid (lon, lat, phi50) samples provided.")
+        lonp, latp, phi50p = lon[ok], lat[ok], phi50[ok]
 
-        d_mm = 2.0 ** (-phip)           # Krumbein phi to mm
+        d_mm = 2.0 ** (-phi50p)         # Krumbein phi50 to mm
         d50  = d_mm / 1000.0            # mm to meters
         ks   = ks_factor * d50          # Nikuradse roughness
-        z0_pts = ks / 30.0              # hydraulic roughness length
+        z0_pts = ks / 30.0              # hydraulic roughness length, eq 2 of hec.usace.army.mil/confluence/rasdocs/d2sd/ras2dsedtr/6.3/model-description/bedform-geometry-and-hydraulic-roughness/bottom-roughness
         z0_pts = np.clip(z0_pts, *z0_clip)
 
         # ---- 2) Project (lon,lat) to local metric coordinates (m) ----
@@ -213,7 +230,7 @@ class Fgrid(Gr3):
         tree = cKDTree(np.c_[xp, yp])
         if method == "nearest":
             _, idx = tree.query(np.c_[xn, yn], k=1)
-            z0_nodes = z0_pts[idx]
+            z0 = z0_pts[idx]
         elif method == "idw":
             k_eff = min(k, len(z0_pts))
             dist, idx = tree.query(np.c_[xn, yn], k=k_eff)
@@ -221,23 +238,62 @@ class Fgrid(Gr3):
             dist = np.atleast_2d(dist)
             idx  = np.atleast_2d(idx)
             w = 1.0 / np.maximum(dist, 1e-12) ** power
-            z0_nodes = (w * z0_pts[idx]).sum(axis=1) / w.sum(axis=1)
+            z0 = (w * z0_pts[idx]).sum(axis=1) / w.sum(axis=1)
         else:
             raise ValueError("method must be 'nearest' or 'idw'.")
 
-        z0_nodes = np.clip(z0_nodes, *z0_clip)
+        z0 = np.clip(z0, *z0_clip)
 
-        # ---- 4) z0 to Cd using local depth ----
-        h = np.maximum(np.asarray(depth), float(hmin))
-        # Avoid log singularities
-        ratio = np.maximum(h / np.maximum(z0_nodes, z0_clip[0]), 1.0000001)
-        Cd_nodes = (kappa / np.log(ratio)) ** 2
-        Cd_nodes = np.clip(Cd_nodes, *cd_clip)
+        if out == "Cd":
+            # ---- 4) z0 to Cd using thickness of bottom cell
+            # dzb_min = obj.dzb_min
+
+            z_seabed = hgrid.values[:,None]
+            depth = -z_seabed
+
+            # get z coordinate of vertical levels
+            zcor = depth*vgrid.sigma
+            mask = vgrid.sigma==-1
+            zcorm = np.ma.masked_array(zcor,mask)
+
+            # mask is True where zcorm is masked
+            valid = ~np.ma.getmaskarray(zcorm)           # True where data is *not* masked
+
+            # Index of first True (i.e. first unmasked) along nvlevels for each node
+            first_j = valid.argmax(axis=1)        # shape: (nodes,)
+
+            # Calc bottom layer dz
+            delta_z_bottom = -np.array([z_seabed[i] - zcor[i,first_j[i]] for i in range(0,z_seabed.size)])
+
+            delta_z_bottom = np.ma.masked_array(delta_z_bottom, delta_z_bottom < 0) # mask values over land (negative delta_z_bottom )
+            
+            Cd_min = cd_clip[0]
+            Cd_max = cd_clip[1]
+
+            deltab = delta_z_bottom.data.ravel()
+            deltab[deltab < obj.dzb_min ] = obj.dzb_min
+
+            # mask = (hgrid.values > Cdmax_cutoff_z) | delta_z_bottom.mask # |  (deltab < dzb_min) # mask to apply shallow water Cd to ... with LSC2 vgrid, deltab based mask occurs in the middle of the mesh ... ? is that a problem?
+            mask = (hgrid.values > obj.dzb_min) # recall hgrid values are z coordinates (positive up)
+
+            ratio = np.maximum(deltab / np.maximum(z0, z0_clip[0]), 1.0000001)
+            Cd = ( (1/kappa) * np.log(ratio) )**(-2) # eq 12 of https://schism-dev.github.io/schism/master/schism/physical-formulation.html#boundary-conditions-bc
+
+            Cd[ mask ] = Cd_min
+
+            Cd[Cd < Cd_min] = Cd_min
+
+            Cd[Cd > Cd_max] = Cd_max
+
+            # # Avoid log singularities
+            # ratio = np.maximum(h / np.maximum(z0, z0_clip[0]), 1.0000001)
+            # Cd_nodes = (kappa / np.log(ratio)) ** 2
+            # Cd_nodes = np.clip(Cd, *cd_clip)
 
         if out == "z0":
-            obj.values[:] = z0_nodes
+            obj.values[:] = z0
         elif out == "Cd":
-            obj.values[:] = Cd_nodes
+            obj.values[:] = Cd
 
         return obj
         
@@ -287,7 +343,6 @@ class RoughnessLength(Fgrid):
         self.dzb_decay = 0.
         super().__init__(NchiType.ROUGHNESS_LENGTH, *argv, **kwargs)
 
-
 class DragCoefficient(Fgrid):
 
     def __init__(self, *argv, **kwargs):
@@ -297,7 +352,7 @@ class DragCoefficient(Fgrid):
     def linear_with_depth(
             cls,
             hgrid: Union[str, os.PathLike, Gr3],
-            depth1: float = -1.0,  # Are depth1 and depth2 positive up or positive down?
+            depth1: float = -1.0, 
             depth2: float = -3.0,
             bfric_river: float = 0.0025,
             bfric_land: float = 0.025
@@ -305,8 +360,7 @@ class DragCoefficient(Fgrid):
 
         obj = cls.constant(hgrid, np.nan)
 
-        values = (bfric_river + (depth1 + hgrid.values) *
-                  (bfric_land - bfric_river) / (depth1-depth2))
+        values = (bfric_river + (depth1 + hgrid.values) * (bfric_land - bfric_river) / (depth1-depth2))
         values[values > bfric_land] = bfric_land
         values[values < bfric_river] = bfric_river
 

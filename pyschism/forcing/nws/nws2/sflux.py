@@ -356,7 +356,8 @@ class BaseComponent(ABC):
 
         for i, field in enumerate(getattr(self,self.var_types[0]).get_fields(start_date, rnday)):
             
-            filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
+            # filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
+            filename = f"sflux_{self.name}_{level}.{i+1}.nc" # following schism v5.13.0 update
             if pathlib.Path(outdir / filename).exists() and not overwrite:
                 print(f'{outdir / filename} exists and overwrite={overwrite} ... skipping ...')
                 continue

@@ -5,115 +5,166 @@ import pathlib
 from typing import Union
 
 import f90nml
+import os
+import re
+from enum import Enum
+import warnings
 
 # import pytz
 
 from pyschism import dates
 from pyschism.mesh.fgrid import NchiType
+from pyschism.param.utils import _extract_group_key_order, _to_fortran_scalar
 
 
 logger = logging.getLogger(__name__)
 
 
-# class FlagIcDescriptor:
-
-#     ic_types = [
-#         # (name, type, index)
-#         ("ic_temp", gridgr3.TempIc, 0),
-# ]
-
-#     def __init__(self, name, ic_type, index):
-#         self.type = ic_type
-#         self.name = name
-#         self.index = index
-
-#     def __get__(self, obj, val):
-#         return bool(obj.flag_ic[self.index])
-
-#     def __set__(self, obj, val: bool):
-#         if not isinstance(val, bool):
-#             raise TypeError(
-#                 f"Argument to {self.name} must be boolean, not " f"type {type(val)}."
-#             )
-#         obj.flag_ic[self.index] = int(val)
+# --- metaclass -------------------------------------------------------------
 
 
 class OptMeta(type):
-    def __new__(meta, name, bases, attrs):
+    def __new__(mcls, name, bases, attrs):
+        default_path = pathlib.Path(__file__).parent / "param.nml"
+        default_opt = f90nml.read(default_path)["opt"]
 
-        PARAM_DEFAULTS = f90nml.read(pathlib.Path(__file__).parent / 'param.nml')["opt"]
-        for key, value in PARAM_DEFAULTS.items():
-            if key not in attrs:
-                if isinstance(value, list):
-                    attrs[key] = len(value) * [0]
-                else:
-                    attrs[key] = None
-        # for ic_type in FlagIcDescriptor.ic_types:
-        #     attrs[ic_type] = FlagIcDescriptor()
-        return type(name, bases, attrs)
+        # Schema: keys that are allowed (based on default template)
+        attrs["_DEFAULT_TEMPLATE_PATH"] = default_path
+        attrs["_DEFAULT_OPT_KEYS"] = list(default_opt.keys())  # may already be ordered
+        attrs["_DEFAULT_OPT_DEFAULTS"] = dict(default_opt)
 
+        # Predeclare attributes so hasattr()/getattr() behave as expected.
+        # do not put a mutable list as a shared class default.
+        for k, v in default_opt.items():
+            attrs[k] = None
+
+        return super().__new__(mcls, name, bases, attrs)
+
+
+# --- OPT -------------------------------------------------------------------
 
 class OPT(metaclass=OptMeta):
-    """Provides error checking implementation for OPT group"""
+    """
+    Read / write opt section of param.nml
+    
+    Provides [some] error checking implementation for OPT group
+    
+    Add error checking as you go.
+    """
 
     def __init__(
         self,
         start_date: datetime = None,
-        dramp: Union[int, float, timedelta] = None,
-        drampbc: Union[int, float, timedelta] = None,
-        dramp_ss: Union[float, timedelta] = None,
-        drampwafo: Union[float, timedelta] = None,
-        drampwind: Union[float, timedelta] = None,
-        ics=None,
-        nws=None,
-        nchi: Union[int, NchiType] = None,
-        hmin_man=None,
-        dbz_min=None,
-        dbz_decay=None,
-        ic_elev=None,
+        template: Union[os.PathLike, str, dict, f90nml.namelist.Namelist] = None,
+        verbose: bool = True,
+        **opt_kwargs,
     ):
-        self.start_date = start_date
-        self.dramp = dramp
-        self.drampbc = drampbc
-        self.dramp_ss = dramp_ss
-        self.drampwafo = drampwafo
-        self.drampwind = drampwind
-        self.ics = ics
-        self.nchi = nchi
-        self.hmin_man = hmin_man
-        self.dbz_min = dbz_min
-        self.dbz_decay = dbz_decay
-        self.ic_elev = ic_elev
-        self.nws = nws
+        # (1) Load template
+        template_src = template if template is not None else self._DEFAULT_TEMPLATE_PATH
+
+        if isinstance(template_src, (dict, f90nml.namelist.Namelist)):
+            opt_nml = template_src["opt"] if "opt" in template_src else template_src
+            key_order = list(opt_nml.keys())
+        else:
+            template_path = pathlib.Path(template_src)
+            nml = f90nml.read(template_path)
+            opt_nml = nml["opt"]
+
+            # Prefer true file order from raw scan; fallback to parsed order
+            key_order = _extract_group_key_order(template_path, group="opt") or list(opt_nml.keys())
+
+        self._template = dict(opt_nml)
+        self._key_order = key_order
+
+        # allowed keys = schema keys (from default) OR keys found in this template
+        self._allowed_keys = set(self._DEFAULT_OPT_DEFAULTS.keys()) | set(self._template.keys())
+
+        # Initialize instance attributes from template (copy lists!)
+        for k in self._key_order:
+            if k in self._template:
+                v = self._template[k]
+                if isinstance(v, (list, tuple)):
+                    setattr(self, k, list(v))
+                else:
+                    setattr(self, k, v)
+
+        # (2) Apply keywords provided except start_date (start_date handled via setter)
+        if start_date is not None:
+            self.start_date = start_date  
+
+        # (3) Apply **opt_kwargs only if allowed; otherwise warn and ignore.
+        for k, v in opt_kwargs.items():
+            if k == "start_date":
+                if v is not None:
+                    self.start_date = v
+                continue
+
+            if k in self._allowed_keys and hasattr(self, k):
+                setattr(self, k, v)
+            else:
+                warnings.warn(f"OPT: ignoring unknown option {k!r} (not in template/schema).", stacklevel=2)
 
     def __str__(self):
-        data = []
-        PARAM_DEFAULTS = f90nml.read(pathlib.Path(__file__).parent / 'param.nml')["opt"]
-        for key, _ in PARAM_DEFAULTS.items():
-            current = getattr(self, key)
-            if current is not None:
-                if not isinstance(current, list):
-                    data.append(f"  {key}={current}")
-                else:
-                    for i, state in enumerate(current):
-                        if state:
-                            current.append(f"  {current}({i+1}) = 1")
-        data = "\n".join(data)
-        return f"&OPT\n{data}\n/"
+        # (4) Write Fortran namelist in template order with error checking
+        lines = ["&OPT"]
 
-    def to_dict(self):
-        data = {}
-        PARAM_DEFAULTS = f90nml.read(pathlib.Path(__file__).parent / 'param.nml')["opt"]
-        for key, _ in PARAM_DEFAULTS.items():
-            current = getattr(self, key)
-            if current is not None:
-                if not isinstance(current, list):
-                    data[key] = current
+        for k in self._key_order:
+            if not hasattr(self, k):
+                continue
+
+            v = getattr(self, k)
+            if v is None:
+                continue
+
+            # Basic sanity checks using the template value as a guide, if available
+            v_tmpl = self._template.get(k, None)
+
+            if isinstance(v, (list, tuple)):
+                # Ensure list-like options remain list-like
+                if v_tmpl is not None and not isinstance(v_tmpl, (list, tuple)):
+                    raise TypeError(f"OPT.{k} should be a scalar (template is scalar), got list/tuple.")
+                for i, item in enumerate(v, start=1):
+                    if item is None:
+                        continue
+                    lines.append(f"\t{k}({i})={_to_fortran_scalar(item)}")
+            else:
+                if v_tmpl is not None and isinstance(v_tmpl, (list, tuple)):
+                    raise TypeError(f"OPT.{k} should be a list (template is list), got {type(v)}.")
+                lines.append(f"\t{k}={_to_fortran_scalar(v)}")
+
+        lines.append("/")
+        return "\n".join(lines)
+    
+    def to_dict(self) -> dict:
+        data: dict = {}
+
+        for key in self._key_order:
+            if not hasattr(self, key):
+                continue
+
+            current = getattr(self, key, None)
+
+            # fall back to template default if unset
+            if current is None:
+                current = self._template.get(key, None)
+
+            # if still None, skip
+            if current is None:
+                continue
+
+            if isinstance(current, (list, tuple)):
+                out = [0] * len(current)
+                for i, state in enumerate(current):
+                    # treat truthy values as 1, falsy as 0
+                    out[i] = 1 if bool(state) else 0
+                data[key] = out
+            else:
+                # optionally normalize boolean scalars to int (common in namelists)
+                if isinstance(current, bool):
+                    data[key] = int(current)
                 else:
-                    data[key] = len(current) * [0]
-                    for i, state in enumerate(current):
-                        if state:
-                            data[key][i] = 1
+                    data[key] = current
+
         return data
 
     @property
@@ -375,6 +426,13 @@ class OPT(metaclass=OptMeta):
     def ic_elev(self, ic_elev: Union[int, None]):
         assert ic_elev in [0, 1, None]
         self._ic_elev = ic_elev
+
+    @property
+    def template(self):
+        return self._template
+    @template.setter
+    def template(self, template):
+        self._template = template
 
     # @property
     # def flag_ic(self) -> List[int]:

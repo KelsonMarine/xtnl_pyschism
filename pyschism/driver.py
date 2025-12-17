@@ -197,25 +197,40 @@ class ModelDriver:
                 rnday = rnday / timedelta(days=1)    
         if isinstance(dt,timedelta):
                 dt = dt.total_seconds()
-        if (ihfskip is None) and (nspool is None):
-            # These two flags control the global netcdf outputs. 
-            # Output is done every nspool steps, and a new output stack is opened every ihfskip steps. 
-            # The code requires that ihfskip is a multiple of nspool, and nhot_write (see SCHOUT section) is a a multiple of ihfskip.
-            nspool = timedelta(minutes=60) / timedelta(seconds=dt) # output data every 60 min
-            ihfskip = timedelta(days=1) / timedelta(seconds=dt)
+        if (ihfskip is None):
+            ihfskip = timedelta(days=1) / timedelta(seconds=dt) # default new output every day
+        elif ihfskip is not None:
+            ihfskip = ihfskip
+        if (nspool is None):
+            nspool = timedelta(minutes=60) / timedelta(seconds=dt) # default output data every 60 min
+        elif isinstance(nspool, timedelta):
+            nspool = nspool.total_seconds() / dt # output evey npsool time steps        
+        if isinstance(dramp,timedelta):
+            dramp = dramp / timedelta(days=1)    
+        if isinstance(drampbc,timedelta):
+            drampbc = drampbc / timedelta(days=1)     
+        if isinstance(dramp_ss,timedelta):
+            dramp_ss = dramp_ss / timedelta(days=1)   
+        if isinstance(drampwind,timedelta):
+            drampwind = drampwind / timedelta(days=1)  
+        if isinstance(drampbc,timedelta):
+            drampbc = drampbc / timedelta(days=1)  
+        if isinstance(drampwafo,timedelta):
+            drampwafo = drampwafo / timedelta(days=1)  
+        if isinstance(nhot_write, timedelta):
+            nhot_write = nhot_write.total_seconds() / dt # output evey npsool time steps    
 
-        # TODO: init template
         self.param_template = param_template
         self.wwm_param_template = wwm_param_template
 
         # Define SCHISM param.nml
         if param is None:
-            
             params_kwargs = {
                 'dt': dt,
                 'rnday': rnday,
                 'nspool': nspool,
                 'ihfskip': ihfskip,
+                'schout':surface_outputs
             }
             if param_template is not None:
                 params_kwargs['template'] = param_template
@@ -223,19 +238,18 @@ class ModelDriver:
         else: 
             self.param = param
 
-        # set core parameters
-        # self.param.core.dt = dt
-        # self.param.core.rnday = rnday
-        # self.param.core.nspool = nspool if nspool is not None else self.param.core.rnday
-        # self.param.core.ihfskip = (
-        #     ihfskip if ihfskip is not None else timedelta(days=self.param.core.rnday)
-        # )
-        # if self.config.vgrid.is2D():
-        #     self.param.core.ibc = Stratification.BAROTROPIC
-        #     if self.config.forcings.baroclinic is not None:
-        #         self.param.core.ibtp = 1
-        # else:
-        #     self.param.core.ibc = Stratification.BAROCLINIC
+        # ensure core param.nml parameters are set
+        self.param.core.dt = dt
+        self.param.core.rnday = rnday
+        self.param.core.nspool = nspool 
+        self.param.core.ihfskip = ihfskip
+        
+        if self.config.vgrid.is2D():
+            self.param.core.ibc = Stratification.BAROTROPIC
+            if self.config.forcings.baroclinic is not None:
+                self.param.core.ibtp = 1
+        else:
+            self.param.core.ibc = Stratification.BAROCLINIC
        
         # If ibc=0, a baroclinic model is used and regardless of the value for ibtp, the transport equation is solved. 
         # If ibc=1, a barotropic model is used, and the transport equation may (when ibtp=1) or may not (when ibtp=0) be solved; 
@@ -256,15 +270,12 @@ class ModelDriver:
         self.param.opt.nchi = self.config.fgrid.nchi
         if self.config.fgrid.nchi == -1:
             self.param.opt.hmin_man = self.config.fgrid.hmin_man
-
         elif self.config.fgrid.nchi == 1:
             self.param.opt.dbz_min = self.config.fgrid.dzb_min
             self.param.opt.dbz_decay = self.config.fgrid.dzb_decay
 
-        self.param.schout.nhot_write = (
-            self.param.core.ihfskip if nhot_write is None else nhot_write
-        )
-
+        self.param.schout.nhot_write = nhot_write
+    
         self.tmpdir = tempfile.TemporaryDirectory()
         self.outdir = pathlib.Path(self.tmpdir.name)
 
@@ -305,18 +316,25 @@ class ModelDriver:
             if self.elev_ic is None:
                 if self.hotstart is None:
                     self.elev_ic = True
-            self.param.opt.if_source = 1 # ASCII source / sink terms in source_sink.in, vsource.th, msource.th, vsink.th, msink.th
+            self.param.opt.if_source = 1 # source / sink terms in source_sink.in, vsource.th, msource.th, vsink.th, msink.th
 
-        for var in self.param.schout.surface_output_vars:
-            val = surface_outputs.pop(var) if var in surface_outputs else None
-            if val is not None:
-                setattr(self.param.schout, var, val)
+        # for var in self.param.schout.surface_output_vars:
+        #     val = surface_outputs.pop(var) if var in surface_outputs else None
+        #     if val is not None:
+        #         setattr(self.param.schout, var, val)
 
-        if len(surface_outputs) > 0:
-            raise TypeError(
-                "ModelDriver() got an unexpected keyword arguments"
-                f" {list(surface_outputs)}."
-            )
+        for k, var_list in self.param.schout.surface_output_vars_map.items():
+            for (v,index) in var_list:
+                if v in surface_outputs.keys():
+                    val = surface_outputs.pop(v) if v in surface_outputs else None
+                    if val is not None:
+                        setattr(self.param.schout, v, val)
+                    
+        # if len(surface_outputs) > 0:
+        #     raise TypeError(
+        #         "ModelDriver() got an unexpected keyword arguments"
+        #         f" {list(surface_outputs)}."
+        #     )
 
         # Define WWM wwmparam.nml 
         if self.config.waves is not None:

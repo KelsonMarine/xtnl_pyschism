@@ -33,6 +33,10 @@
   sed_class = 5 !SED3D (USE_SED)
   eco_class = 27 !EcoSim (USE_ECO): must be between [25,60]
 
+! # of vertical bins in vegetation module (used only if iveg/=0)
+  nbins_veg_vert = 1
+  nmarsh_types = 1
+
 ! Global output controls
   nspool = 36 !output step spool
   ihfskip = 864 !stack spool; every ihfskip steps will be put into 1_*, 2_*, etc...
@@ -319,7 +323,8 @@
 !----------------------------------------------------------------------
 ! Specify level #'s if age module is invoked (USE_AGE), for 1st half of tracers only
 !----------------------------------------------------------------------
-  level_age = 9, -999 !default: -999 (all levels)
+  level_age(1) = 9 !default: -999 (all levels)
+  level_age(2) = -999
 
 !-----------------------------------------------------------------------
 ! Horizontal diffusivity option. if ihdif=1, horizontal diffusivity is given in hdif.gr3
@@ -832,7 +837,7 @@
   iof_hydro(22) = 0 !vertical eddy viscosity [m^2/s] {viscosity}  3D
   iof_hydro(23) = 0 !turbulent kinetic energy {turbulentKineticEner}   3D
   iof_hydro(24) = 0 !turbulent mixing length [m] {mixingLength}  3D
-!  iof_hydro(25) = 1 !z-coord {zCoordinates} 3D - this flag should be on for visIT etc
+  iof_hydro(25) = 1 !z-coord {zCoordinates} 3D - this flag should be on for visIT etc
   iof_hydro(26) = 1 !horizontal vel vector [m/s] {horizontalVelX,Y} 3D vector
   iof_hydro(27) = 0 !horizontal vel vector defined @side [m/s] {horizontalSideVelX,Y} 3D vector
   iof_hydro(28) = 0 !vertical vel. @elem [m/s] {verticalVelAtElement} 3D

@@ -1,6 +1,6 @@
 from enum import Enum
 
-
+# this is used in pyschism.driver
 class Stratification(Enum):
     BAROCLINIC = 0
     BAROTROPIC = 1
@@ -14,67 +14,103 @@ class Stratification(Enum):
                 return cls[name.upper()]
         raise ValueError(f'Argument {name} is not a valid Stratification type.')
 
-
-class Coriolis(Enum):
-    AUTO = 1
-    CORICOEFF = 0
-    RLATITUDE = -1
-
-
-class IofWetdryVariables(Enum):
-    wetdry_node = "wetdry_node"
-    wetdry_elem = "wetdry_elem"
-    wetdry_side = "wetdry_side"
-
-    @classmethod
-    def _missing_(cls, name):
-        raise ValueError(f"{name} is not a valid WETDRY output variable.")
+# # not used in Opt anymore
+# class Coriolis(Enum):
+#     AUTO = 1
+#     CORICOEFF = 0
+#     RLATITUDE = -1
 
 
-class IofZcorVariables(Enum):
-    zcor = "zcor"
+# class IofWetdryVariables(Enum):
+#     wetdry_node = "wetdry_node"
+#     wetdry_elem = "wetdry_elem"
+#     wetdry_side = "wetdry_side"
 
-    @classmethod
-    def _missing_(cls, name):
-        raise ValueError(f"{name} is not a valid ZCOR output variable.")
+#     @classmethod
+#     def _missing_(cls, name):
+#         raise ValueError(f"{name} is not a valid WETDRY output variable.")
 
+
+# class IofZcorVariables(Enum):
+#     zcor = "zcor"
+
+#     @classmethod
+#     def _missing_(cls, name):
+#         raise ValueError(f"{name} is not a valid ZCOR output variable.")
+
+# # pyschism version ...
+# class IofHydroVariables(Enum):
+#     elev = "elev"
+#     air_pressure = "air_pressure"
+#     air_temperature = "air_temperature"
+#     specific_humidity = "specific_humidity"
+#     solar_radiation = "solar_radiation"
+#     sensible_flux = "sensible_flux"
+#     latent_heat = "latent_heat"
+#     upward_longwave = "upward_longwave"
+#     downward_longwave = "downward_longwave"
+#     total_heat_flux = "total_heat_flux"
+#     evaporation = "evaporation"
+#     precipitation = "precipitation"
+#     bottom_stress = "bottom_stress"
+#     wind_speed = "wind_speed"
+#     wind_stress = "wind_stress"
+#     dahv = "dahv"
+#     vertical_velocity = "vertical_velocity"
+#     temp = "temp"
+#     salt = "salt"
+#     water_density = "water_density"
+#     diffusivity = "diffusivity"
+#     viscosity = "viscosity"
+#     TKE = "TKE"
+#     mixing_length = "mixing_length"
+#     hvel = "hvel"
+#     hvel_side = "hvel_side"
+#     wvel_elem = "wvel_elem"
+#     temp_elem = "temp_elem"
+#     salt_elem = "salt_elem"
+#     pressure_gradient = "pressure_gradient"
+#     sediment_temperature = "sediment_temperature"
+
+#     @classmethod
+#     def _missing_(cls, name):
+#         raise ValueError(f"{name} is not a valid HYDRO output variable.")
 
 class IofHydroVariables(Enum):
-    elev = "elev"
-    air_pressure = "air_pressure"
-    air_temperature = "air_temperature"
-    specific_humidity = "specific_humidity"
-    solar_radiation = "solar_radiation"
-    sensible_flux = "sensible_flux"
-    latent_heat = "latent_heat"
-    upward_longwave = "upward_longwave"
-    downward_longwave = "downward_longwave"
-    total_heat_flux = "total_heat_flux"
-    evaporation = "evaporation"
-    precipitation = "precipitation"
-    bottom_stress = "bottom_stress"
-    wind_speed = "wind_speed"
-    wind_stress = "wind_stress"
-    dahv = "dahv"
-    vertical_velocity = "vertical_velocity"
-    temp = "temp"
-    salt = "salt"
-    water_density = "water_density"
-    diffusivity = "diffusivity"
-    viscosity = "viscosity"
-    TKE = "TKE"
-    mixing_length = "mixing_length"
-    hvel = "hvel"
-    hvel_side = "hvel_side"
-    wvel_elem = "wvel_elem"
-    temp_elem = "temp_elem"
-    salt_elem = "salt_elem"
-    pressure_gradient = "pressure_gradient"
-
+    iof_hydro_1 = "iof_hydro_1" 
+    iof_hydro_2 = "iof_hydro_2"
+    iof_hydro_3 = "iof_hydro_3"
+    iof_hydro_4 = "iof_hydro_4"
+    iof_hydro_5 = "iof_hydro_5"
+    iof_hydro_6 = "iof_hydro_6"
+    iof_hydro_9 = "iof_hydro_9"
+    iof_hydro_10 = "iof_hydro_10"
+    iof_hydro_11 = "iof_hydro_11"
+    iof_hydro_12 = "iof_hydro_12"
+    iof_hydro_13 = "iof_hydro_13"
+    iof_hydro_14 = "iof_hydro_14"
+    iof_hydro_15 = "iof_hydro_15"
+    iof_hydro_16 = "iof_hydro_16"
+    iof_hydro_17 = "iof_hydro_17"
+    iof_hydro_18 = "iof_hydro_18"
+    iof_hydro_19 = "iof_hydro_19"
+    iof_hydro_20 = "iof_hydro_20"
+    iof_hydro_21 = "iof_hydro_21"
+    iof_hydro_22 = "iof_hydro_22"
+    iof_hydro_23 = "iof_hydro_23"
+    iof_hydro_24 = "iof_hydro_24"
+    iof_hydro_25 = "iof_hydro_25"
+    iof_hydro_26 = "iof_hydro_26"
+    iof_hydro_27 = "iof_hydro_27"
+    iof_hydro_28 = "iof_hydro_28"
+    iof_hydro_29 = "iof_hydro_29"
+    iof_hydro_30 = "iof_hydro_30"
+    iof_hydro_31 = "iof_hydro_31"
+    iof_hydro_32 = "iof_hydro_32"
+    
     @classmethod
     def _missing_(cls, name):
         raise ValueError(f"{name} is not a valid HYDRO output variable.")
-
 
 class IofDvdVariables(Enum):
     DVD_1 = "DVD_1"
@@ -84,35 +120,88 @@ class IofDvdVariables(Enum):
         raise ValueError(f"{name} is not a valid DVD output variable.")
 
 
+# class IofWwmVariables(Enum):
+#     WWM_1 = "WWM_1" 
+#     WWM_2 = "WWM_2"
+#     WWM_3 = "WWM_3"
+#     WWM_4 = "WWM_4"
+#     WWM_5 = "WWM_5"
+#     WWM_6 = "WWM_6"
+#     WWM_9 = "WWM_9"
+#     WWM_10 = "WWM_10"
+#     WWM_11 = "WWM_11"
+#     WWM_12 = "WWM_12"
+#     WWM_13 = "WWM_13"
+#     WWM_14 = "WWM_14"
+#     WWM_15 = "WWM_15"
+#     WWM_16 = "WWM_16"
+#     WWM_17 = "WWM_17"
+#     WWM_18 = "WWM_18"
+#     WWM_19 = "WWM_19"
+#     WWM_20 = "WWM_20"
+#     WWM_21 = "WWM_21"
+#     WWM_22 = "WWM_22"
+#     WWM_23 = "WWM_23"
+#     WWM_24 = "WWM_24"
+#     WWM_25 = "WWM_25"
+#     WWM_26 = "WWM_26"
+#     WWM_27 = "WWM_27"
+#     WWM_28 = "WWM_28"
+#     WWM_29 = "WWM_29"
+#     WWM_30 = "WWM_30"
+#     WWM_31 = "WWM_31"
+#     WWM_32 = "WWM_32"
+#     WWM_33 = "WWM_33"
+#     WWM_34 = "WWM_34"
+#     WWM_35 = "WWM_35"
+#     WWM_36 = "WWM_36"
+#     WWM_37 = "WWM_37"
+#     # WWM_energy_dir = "WWM_energy_dir"
+#     # wave_force = "wave_force"
+
+#     @classmethod
+#     def _missing_(cls, name):
+#         raise ValueError(f"{name} is not a valid WWM output variable.")
+
+
 class IofWwmVariables(Enum):
-    WWM_1 = "WWM_1"
-    WWM_2 = "WWM_2"
-    WWM_3 = "WWM_3"
-    WWM_4 = "WWM_4"
-    WWM_5 = "WWM_5"
-    WWM_6 = "WWM_6"
-    WWM_9 = "WWM_9"
-    WWM_10 = "WWM_10"
-    WWM_11 = "WWM_11"
-    WWM_12 = "WWM_12"
-    WWM_13 = "WWM_13"
-    WWM_14 = "WWM_14"
-    WWM_15 = "WWM_15"
-    WWM_16 = "WWM_16"
-    WWM_17 = "WWM_17"
-    WWM_18 = "WWM_18"
-    WWM_19 = "WWM_19"
-    WWM_20 = "WWM_20"
-    WWM_21 = "WWM_21"
-    WWM_22 = "WWM_22"
-    WWM_23 = "WWM_23"
-    WWM_24 = "WWM_24"
-    WWM_25 = "WWM_25"
-    WWM_26 = "WWM_26"
-    WWM_27 = "WWM_27"
-    WWM_28 = "WWM_28"
-    WWM_energy_dir = "WWM_energy_dir"
-    wave_force = "wave_force"
+    iof_wwm_1 = "iof_wwm_1" 
+    iof_wwm_2 = "iof_wwm_2"
+    iof_wwm_3 = "iof_wwm_3"
+    iof_wwm_4 = "iof_wwm_4"
+    iof_wwm_5 = "iof_wwm_5"
+    iof_wwm_6 = "iof_wwm_6"
+    iof_wwm_7 = "iof_wwm_7"
+    iof_wwm_8 = "iof_wwm_8"
+    iof_wwm_9 = "iof_wwm_9"
+    iof_wwm_10 = "iof_wwm_10"
+    iof_wwm_11 = "iof_wwm_11"
+    iof_wwm_12 = "iof_wwm_12"
+    iof_wwm_13 = "iof_wwm_13"
+    iof_wwm_14 = "iof_wwm_14"
+    iof_wwm_15 = "iof_wwm_15"
+    iof_wwm_16 = "iof_wwm_16"
+    iof_wwm_17 = "iof_wwm_17"
+    iof_wwm_18 = "iof_wwm_18"
+    iof_wwm_19 = "iof_wwm_19"
+    iof_wwm_20 = "iof_wwm_20"
+    iof_wwm_21 = "iof_wwm_21"
+    iof_wwm_22 = "iof_wwm_22"
+    iof_wwm_23 = "iof_wwm_23"
+    iof_wwm_24 = "iof_wwm_24"
+    iof_wwm_25 = "iof_wwm_25"
+    iof_wwm_26 = "iof_wwm_26"
+    iof_wwm_27 = "iof_wwm_27"
+    iof_wwm_28 = "iof_wwm_28"
+    iof_wwm_29 = "iof_wwm_29"
+    iof_wwm_30 = "iof_wwm_30"
+    iof_wwm_31 = "iof_wwm_31"
+    iof_wwm_32 = "iof_wwm_32"
+    iof_wwm_33 = "iof_wwm_33"
+    iof_wwm_34 = "iof_wwm_34"
+    iof_wwm_35 = "iof_wwm_35"
+    iof_wwm_36 = "iof_wwm_36"
+    iof_wwm_37 = "iof_wwm_37"
 
     @classmethod
     def _missing_(cls, name):
@@ -407,73 +496,143 @@ class GFSProduct(Enum):
     GFS_1P00 = "gfs_1p00"
 
 
-class iof_hydro(Enum):
-    elev = 0
-    air_pressure = 1
-    air_temperature = 2
-    specific_humidity = 3
-    solar_radiation = 4
-    sensible_flux = 5
-    latent_heat = 6
-    upward_longwave = 7
-    downward_longwave = 8
-    total_heat_flux = 9
-    evaporation = 10
-    precipitation = 11
-    bottom_stress = 12
-    wind_speed = 13
-    wind_stress = 14
-    dahv = 15
-    vertical_velocity = 16
-    temp = 17
-    salt = 18
-    water_density = 19
-    diffusivity = 20
-    viscosity = 21
-    TKE = 22
-    mixing_length = 23
-    hvel = 24
-    hvel_side = 25
-    wvel_elem = 26
-    temp_elem = 27
-    salt_elem = 28
-    pressure_gradient = 29
+# class iof_hydro(Enum):
+#     elev = 0
+#     air_pressure = 1
+#     air_temperature = 2
+#     specific_humidity = 3
+#     solar_radiation = 4
+#     sensible_flux = 5
+#     latent_heat = 6
+#     upward_longwave = 7
+#     downward_longwave = 8
+#     total_heat_flux = 9
+#     evaporation = 10
+#     precipitation = 11
+#     bottom_stress = 12
+#     wind_speed = 13
+#     wind_stress = 14
+#     dahv = 15
+#     vertical_velocity = 16
+#     temp = 17
+#     salt = 18
+#     water_density = 19
+#     diffusivity = 20
+#     viscosity = 21
+#     TKE = 22
+#     mixing_length = 23
+#     hvel = 24
+#     hvel_side = 25
+#     wvel_elem = 26
+#     temp_elem = 27
+#     salt_elem = 28
+#     pressure_gradient = 29
 
+class iof_hydro(Enum):
+    iof_hydro_1  = 0
+    iof_hydro_2  = 1
+    iof_hydro_3  = 2
+    iof_hydro_4  = 3
+    iof_hydro_5  = 4
+    iof_hydro_6  = 5
+    iof_hydro_7  = 6
+    iof_hydro_8  = 7
+    iof_hydro_9  = 8
+    iof_hydro_10 = 9
+    iof_hydro_11 = 10
+    iof_hydro_12 = 11
+    iof_hydro_13 = 12
+    iof_hydro_14 = 13
+    iof_hydro_15 = 14
+    iof_hydro_16 = 15
+    iof_hydro_17 = 16
+    iof_hydro_18 = 17
+    iof_hydro_19 = 18
+    iof_hydro_20 = 19
+    iof_hydro_21 = 20
+    iof_hydro_22 = 21
+    iof_hydro_23 = 22
+    iof_hydro_24 = 23
+    iof_hydro_25 = 24
+    iof_hydro_26 = 25
+    iof_hydro_27 = 26
+    iof_hydro_28 = 27
+    iof_hydro_29 = 28
+    iof_hydro_30 = 29
+    iof_hydro_31 = 30
+    iof_hydro_32 = 31
+
+# class iof_wwm(Enum):
+#     iof_wwm_1 = 0
+#     iof_wwm_2 = 1
+#     iof_wwm_3 = 2
+#     iof_wwm_4 = 3
+#     iof_wwm_5 = 4
+#     iof_wwm_6 = 5
+#     iof_wwm_9 = 6
+#     iof_wwm_10 = 7
+#     iof_wwm_11 = 8
+#     iof_wwm_12 = 9
+#     iof_wwm_13 = 10
+#     iof_wwm_14 = 11
+#     iof_wwm_15 = 12
+#     iof_wwm_16 = 13
+#     iof_wwm_17 = 14
+#     iof_wwm_18 = 15
+#     iof_wwm_19 = 16
+#     iof_wwm_20 = 17
+#     iof_wwm_21 = 18
+#     iof_wwm_22 = 19
+#     iof_wwm_23 = 20
+#     iof_wwm_24 = 21
+#     iof_wwm_25 = 22
+#     iof_wwm_26 = 23
+#     iof_wwm_27 = 24
+#     iof_wwm_28 = 25
+    # iof_wwm_energy_dir = 26
+    # wave_force = 27
+
+class iof_wwm(Enum):
+    iof_wwm_1  = 0
+    iof_wwm_2  = 1
+    iof_wwm_3  = 2
+    iof_wwm_4  = 3
+    iof_wwm_5  = 4
+    iof_wwm_6  = 5
+    iof_wwm_7  = 6
+    iof_wwm_8  = 7
+    iof_wwm_9  = 8
+    iof_wwm_10 = 9
+    iof_wwm_11 = 10
+    iof_wwm_12 = 11
+    iof_wwm_13 = 12
+    iof_wwm_14 = 13
+    iof_wwm_15 = 14
+    iof_wwm_16 = 15
+    iof_wwm_17 = 16
+    iof_wwm_18 = 17
+    iof_wwm_19 = 18
+    iof_wwm_20 = 19
+    iof_wwm_21 = 20
+    iof_wwm_22 = 21
+    iof_wwm_23 = 22
+    iof_wwm_24 = 23
+    iof_wwm_25 = 24
+    iof_wwm_26 = 25
+    iof_wwm_27 = 26
+    iof_wwm_28 = 27
+    iof_wwm_29 = 28
+    iof_wwm_30 = 29
+    iof_wwm_31 = 30
+    iof_wwm_32 = 31
+    iof_wwm_33 = 32
+    iof_wwm_34 = 33
+    iof_wwm_35 = 34
+    iof_wwm_36 = 35
+    iof_wwm_37 = 36
 
 class iof_dvd(Enum):
     DVD_1 = 0
-
-
-class iof_wwm(Enum):
-    WWM_1 = 0
-    WWM_2 = 1
-    WWM_3 = 2
-    WWM_4 = 3
-    WWM_5 = 4
-    WWM_6 = 5
-    WWM_9 = 6
-    WWM_10 = 7
-    WWM_11 = 8
-    WWM_12 = 9
-    WWM_13 = 10
-    WWM_14 = 11
-    WWM_15 = 12
-    WWM_16 = 13
-    WWM_17 = 14
-    WWM_18 = 15
-    WWM_19 = 16
-    WWM_20 = 17
-    WWM_21 = 18
-    WWM_22 = 19
-    WWM_23 = 20
-    WWM_24 = 21
-    WWM_25 = 22
-    WWM_26 = 23
-    WWM_27 = 24
-    WWM_28 = 25
-    WWM_energy_dir = 26
-    wave_force = 27
-
 
 class iof_gen(Enum):
     GEN_1 = 0

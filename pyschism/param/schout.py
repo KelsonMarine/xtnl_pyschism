@@ -1,7 +1,10 @@
 from datetime import timedelta
 import logging
 from typing import Union
-
+import os
+import f90nml
+import pathlib
+import warnings
 from pyschism.enums import (
     # IofWetdryVariables,
     # IofZcorVariables,
@@ -21,6 +24,7 @@ from pyschism.enums import (
     IofAnaVariables,
     SchoutType
 )
+from pyschism.param.utils import _extract_group_key_order, _to_fortran_scalar
 
 
 _logger = logging.getLogger(__name__)
@@ -32,10 +36,10 @@ class SurfaceOutputVars:
         self._surface_output_vars = {
             'iof_hydro': [(var.value, i) for i, var
                           in enumerate(IofHydroVariables)],
-            'iof_dvd': [(var.value, i) for i, var
-                        in enumerate(IofDvdVariables)],
             'iof_wwm': [(var.value, i) for i, var
                         in enumerate(IofWwmVariables)],
+            'iof_dvd': [(var.value, i) for i, var
+                        in enumerate(IofDvdVariables)],
             'iof_gen': [(var.value, i) for i, var
                         in enumerate(IofGenVariables)],
             'iof_age': [(var.value, i) for i, var
@@ -97,7 +101,9 @@ class SchoutMeta(type):
         for iof_, outputs in meta.surface_output_vars.items():
             for name, id in outputs:
                 output_vars.append(name)
-        attrs['surface_output_vars'] = output_vars
+        # attrs['surface_output_vars'] = output_vars
+        attrs['surface_output_var_names'] = output_vars
+        attrs['surface_output_vars_map'] = meta.surface_output_vars  # keep the dict
         return type(name, bases, attrs)
 
 
@@ -108,8 +114,14 @@ class SCHOUT(
 
     def __init__(
             self,
+            nc_out: Union[bool, int] = True,
+            iof_ugrid: int = 2,
+            nhot: Union[bool, int] = True,
             nhot_write: int = None,
+            iout_sta: Union[bool, int] = False,
             nspool_sta: int = None,
+            template: Union[bool, str, os.PathLike, dict, f90nml.namelist.Namelist] = None,
+            verbose: bool = True,
             **outputs
     ):
         """
@@ -118,13 +130,65 @@ class SCHOUT(
             - if None it will be disabled.
             - if int interpreted as iteration
             - if timedelta it will be rounded to the nearest iteration
+        template: template param.nml containing &schout section
+
+        **outputs: name-value pairs of 
         """
 
-        self.nhot_write = nhot_write
-        self.nspool_sta = nspool_sta
+        # copy class-default list into the instance for each 
+        for iof_type in self.__class__.surface_output_vars_map.keys():
+            setattr(self, f'_{iof_type}', getattr(self.__class__, f'_{iof_type}').copy())
 
+        # !-----------------------------------------------------------------------
+        # ! Main switch to control netcdf. If =0, SCHISM won't output nc files 
+        # ! at all (useful for other programs like ESMF to output)
+        # !-----------------------------------------------------------------------
+        self.nc_out = nc_out
+
+        # !-----------------------------------------------------------------------
+        # ! UGRID option for _3D_ outputs under scribed IO (out2d*.nc always has meta
+        # ! data info). If iof_ugrid > 0, 3D outputs will also have UGRID metadata.  
+        # ! if iof_ugrid == 1 3D output will contain UGRID mesh data (at the expense
+        # ! of file size); if iof_ugrid == 2, 3D output references mesh data in the 
+        # ! 2D output.
+        # !-----------------------------------------------------------------------
+        self.iof_ugrid = iof_ugrid
+
+        # !-----------------------------------------------------------------------
+        # ! Option for hotstart outputs
+        # !-----------------------------------------------------------------------
+        self.nhot = nhot # !0 : no *_hotstart.nc,  1: output *_hotstart.nc every 'nhot_write' steps
+        self.nhot_write = nhot_write # !must be a multiple of ihfskip if nhot=1 (output *_hotstart every 'nhot_write' time steps)
+
+        # !-----------------------------------------------------------------------
+        # ! Station output option. If iout_sta/=0, need output skip (nspool_sta) and
+        # ! a station.in. If ics=2, the cordinates in station.in must be in lon., lat,
+        # ! and z (positive upward; not used for 2D variables). 
+        # !-----------------------------------------------------------------------
+        self.iout_sta = iout_sta
+        self.nspool_sta = nspool_sta # !needed if iout_sta/=0; mod(nhot_write,nspool_sta) must=0
+
+        self.verbose = verbose
+        template = template if template is not None else pathlib.Path(__file__).parent / 'param.nml'
+
+        # Set template values
+        self.template = f90nml.read(template)["schout"]
+        # for key, value in self.template.items():
+        #     if getattr(self,key,None) is None:
+        #         setattr(self,key,value)
+        for key, value in self.template.items():
+            if key.startswith("iof_") and isinstance(value, (list, tuple)):
+                setattr(self, f'_{key}', list(value))
+            else:
+                if getattr(self, key, None) is None:
+                    setattr(self, key, value)
+
+        # Set individual outputs via kwargs
         for key, val in outputs.items():
-            setattr(self, key, val)
+            if hasattr(self, key):
+                setattr(self, key, val)
+            else:
+                warnings.warn(f"SCHOUT: ignoring unknown output {key!r}.", stacklevel=2)
 
     def __iter__(self):
         for outvar in self._surface_output_vars:
@@ -132,26 +196,15 @@ class SCHOUT(
 
     def __str__(self):
         schout = ["&SCHOUT"]
-        if self.nhot_write is not None:
-            schout.append(f"  nhot={self.nhot}")
-            schout.append(f"  nhot_write={self.nhot_write}")
-        if self.nspool_sta is not None:
-            nspool_sta = self.nspool_sta
-            if isinstance(nspool_sta, timedelta):
-                nspool_sta = int(round(nspool_sta.total_seconds() / self.dt))
-            if isinstance(nspool_sta, float):
-                nspool_sta = int(
-                    round(timedelta(hours=nspool_sta) / self.dt))
-            if isinstance(nspool_sta, (int, float)):
-                if nspool_sta <= 0:
-                    raise ValueError("nspool_sta must be positive.")
-            schout.append(f"  iout_sta={self.iout_sta}")
-            schout.append(f"  nspool_sta={nspool_sta}")
-        for var in dir(self):
-            if var.startswith('_iof'):
-                for i, state in enumerate(getattr(self, var)):
-                    if state == 1:
-                        schout.append(f'  {var[1:]}({i+1})={state}')
+        for k in ['nc_out', 'iof_ugrid','nhot','nhot_write','iout_sta','nspool_sta']:
+            v = getattr(self,k,None)
+            if v is None:
+                continue
+            schout.append(f"\t{k}={_to_fortran_scalar(v)}")
+        for k in self.surface_output_vars_map.keys():
+            for i, state in enumerate(getattr(self, f'_{k}')):
+                if self.verbose or state:
+                    schout.append(f'\t{k}({i+1})={_to_fortran_scalar(state)}')
         schout.append('/')
         return '\n'.join(schout)
 
@@ -175,11 +228,24 @@ class SCHOUT(
         for var in dir(self):
             if var.startswith('_iof'):
                 _var = var[1:]
-                data[_var] = len(getattr(self, var)) * [0]
                 for i, state in enumerate(getattr(self, var)):
-                    if state == 1:
-                        data[_var][i] = state
+                    # if state == 1:
+                    #     data[_var][i] = state
+                    data[_var][i] = state
         return data
+    
+    
+    def to_dict(self):
+        schout = {}
+        schout = ["&SCHOUT"]
+        for k in ['nc_out', 'iof_ugrid','nhot','nhot_write','iout_sta','nspool_sta']:
+            v = getattr(self,k,None)
+            if v is None:
+                continue
+            schout[k] = v
+        for k in self.surface_output_vars_map.keys():
+            schout[k] = getattr(self, k)
+        return schout
 
     @property
     def nhot_write(self):

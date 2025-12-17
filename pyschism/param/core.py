@@ -8,7 +8,7 @@ import f90nml
 
 import f90nml.namelist
 from pyschism.enums import Stratification
-
+from pyschism.param.utils import _extract_group_key_order, _to_fortran_scalar
 
 # class IbcType(Enum):
 #     BAROCLINIC = 0
@@ -19,8 +19,24 @@ from pyschism.enums import Stratification
 #         raise ValueError(f'{name} is not a valid integer for ibc. '
 #                          'Valid integers are 0 or 1.')
 
+class CoreMeta(type):
+    def __new__(mcls, name, bases, attrs):
+        default_path = pathlib.Path(__file__).parent / "param.nml"
+        default_opt = f90nml.read(default_path)["core"]
 
-class CORE:
+        # Schema: keys that are allowed (based on default template)
+        attrs["_DEFAULT_TEMPLATE_PATH"] = default_path
+        attrs["_DEFAULT_OPT_KEYS"] = list(default_opt.keys())  # may already be ordered
+        attrs["_DEFAULT_OPT_DEFAULTS"] = dict(default_opt)
+
+        # Predeclare attributes so hasattr()/getattr() behave as expected.
+        for k, v in default_opt.items():
+            attrs[k] = None
+
+        return super().__new__(mcls, name, bases, attrs)
+
+
+class CORE(metaclass=CoreMeta):
     """Provides error checking implementation for CORE group"""
 
     mandatory = ["ipre", "ibc", "ibtp", "rnday", "dt", "nspool", "ihfskip"]
@@ -34,8 +50,37 @@ class CORE:
         dt: Union[float, timedelta] = 150.0,
         nspool: Union[int, float, timedelta] = None,
         ihfskip: Union[int, timedelta] = None,
+        nmarsh_types: int = 1,
+        nbins_veg_vert: int = 1,
+        ntracer_gen: int = 2,
+        ntracer_age: int = 4,
+        sed_class: int = 5, 
+        eco_class: int = 27,
         template: Union[bool, str, os.PathLike, dict, f90nml.namelist.Namelist] = None,
+        verbose: bool = True
     ):
+        
+
+        # (1) Load template
+        template_src = template if template is not None else self._DEFAULT_TEMPLATE_PATH
+
+        if isinstance(template_src, (dict, f90nml.namelist.Namelist)):
+            opt_nml = template_src["core"] if "core" in template_src else template_src
+            key_order = list(opt_nml.keys())
+        else:
+            template_path = pathlib.Path(template_src)
+            nml = f90nml.read(template_path)
+            opt_nml = nml["core"]
+
+            # Prefer true file order from raw scan; fallback to parsed order
+            key_order = _extract_group_key_order(template_path, group="core") or list(opt_nml.keys())
+
+        self._template = dict(opt_nml)
+        self._key_order = key_order
+
+        # allowed keys = schema keys (from default) OR keys found in this template
+        self._allowed_keys = set(self._DEFAULT_OPT_DEFAULTS.keys()) | set(self._template.keys())
+
         self.ipre = ipre
         self.ibc = ibc
         self.ibtp = ibtp
@@ -43,33 +88,37 @@ class CORE:
         self.dt = dt
         self.nspool = nspool
         self.ihfskip = ihfskip
-        self.template = template
+        self.ntracer_gen = ntracer_gen
+        self.nmarsh_types = nmarsh_types 
+        self.nbins_veg_vert = nbins_veg_vert
+        self.nmarsh_types = nmarsh_types
+        self.ntracter_age = ntracer_age
+        self.sed_class = sed_class
+        self.eco_class = eco_class
+        self.verbose = verbose
 
     def __str__(self):
-        data = []
-        for key, default in self.defaults.items():
-            if hasattr(self, key):
-                current = getattr(self, key)
-            else:
+        lines = []
+        for k in self._key_order:
+            if not hasattr(self, k):
                 continue
-            if key in self.mandatory:
-                data.append(f"  {key}={str(current)}")
-            elif default != current:
-                data.append(f"  {key}={str(current)}")
-        data = "\n".join(data)
-        return f"&CORE\n{data}\n/"
+            v = getattr(self, k)
+            if v is None:
+                continue
+            lines.append(f"\t{k}={_to_fortran_scalar(v)}")
+        lines = "\n".join(lines)
+        return f"&CORE\n{lines}\n/"
+
 
     def to_dict(self):
         output = {}
-        for key, default in self.template.items():
-            if hasattr(self, f"{key}"):
-                current = getattr(self, f"{key}")
-            else:
-                current = None
-            if key in self.mandatory:
-                output[key] = current
-            elif default != current:
-                output[key] = current
+        for k in self._key_order:
+            if not hasattr(self, k):
+                continue
+            v = getattr(self, k)
+            if v is None:
+                continue
+            output[k]=v
         return output
 
     @property
@@ -196,6 +245,22 @@ class CORE:
         self._ihfskip = ihfskip
 
     @property
+    def nmarsh_types(self):
+        return self._nmarsh_types
+
+    @nmarsh_types.setter
+    def nmarsh_types(self, nmarsh_types:int):
+        self._nmarsh_types = nmarsh_types
+
+    @property
+    def nbins_veg_vert(self):
+        return self._nbins_veg_vert
+
+    @nbins_veg_vert.setter
+    def nbins_veg_vert(self, nbins_veg_vert:int):
+        self._nbins_veg_vert = nbins_veg_vert
+
+    @property
     def template(self):
         return self._template
 
@@ -216,5 +281,5 @@ class CORE:
     @property
     def defaults(self):
         if self.template is None:
-            return f90nml.read(pathlib.Path(__file__).parent / 'param.nml')["core"]
+            return f90nml.read(self.template)["core"]
         return self._template

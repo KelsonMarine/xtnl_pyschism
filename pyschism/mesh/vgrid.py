@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Union
 from tqdm import tqdm
 from functools import lru_cache
-import pathlib
+import pathlib, os
 import subprocess
 import tempfile
 import warnings
@@ -331,8 +331,14 @@ class LSC2(Vgrid):
         self.sigma = np.fliplr(snd)
         self._nlayer = nlayer
 
-    def write(self, path, overwrite=False, method: 1 | 2 = 1):
+    def write(self, path: os.PathLike, overwrite: bool = False, method: 1 | 2 = 2):
         '''
+        Write vgrid.in
+
+        path : output filepath
+        overwrite : bool, do / do not overwrite file specified in path if it exists
+        method : int, 1 or 2 (1 was original method, 2 is a speed up; intial checks show they give the same file)
+
         write mg2lsc2 into vgrid.in
         Todo: enable writing from sigma only, to be done with the refactoring of the class.
         '''
@@ -387,7 +393,7 @@ class LSC2(Vgrid):
 
                 # ---- data lines
                 i=0
-                for i in tqdm(range(nvrt),desc=f"level {i}/{nvrt}",leave=False,mininterval=0.2):
+                for i in tqdm(range(nvrt),leave=False,mininterval=0.2):
                     level = i + 1
                     fid.write(f"\n         {level}")
                     col = nvrt - 1 - i  # equivalent to flipud per-node without copying
@@ -427,13 +433,16 @@ class LSC2(Vgrid):
         else:
             # new version
             sline = sline.astype('int')
-            kbp = sline-1
+            kbp = sline-1 # index to first sigma coord
             sigma = np.array([line.split()[1:] for line in lines[3:]]).T.astype('float')
             # replace -9. with -1.
             fpm = sigma < -1
-            sigma[fpm] = -1
+            sigma[fpm] = np.nan
+            nlayer = nvrt - kbp # number of sigma layers
 
-        return cls.from_sigma(sigma)
+        obj = cls.from_sigma(sigma)
+        obj._nlayer = nlayer
+        return obj
 
     @property
     def nvrt(self):

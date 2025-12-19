@@ -9,7 +9,7 @@ from datetime import timedelta
 def _to_fortran_scalar(val):
     """Format a scalar as Fortran namelist value."""
     if isinstance(val, bool):
-        return ".true." if val else ".false."
+        return "1" if val else "0"
     if isinstance(val, str):
         # safest: single-quote and escape single quotes by doubling them
         return "'" + val.replace("'", "''") + "'"

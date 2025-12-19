@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Union
+from tqdm import tqdm
 from functools import lru_cache
 import pathlib
 import subprocess
 import tempfile
-
+import warnings
 import numpy as np
-
 from pyschism.mesh.hgrid import Hgrid
 
 from matplotlib.pyplot import *
@@ -76,15 +77,6 @@ class Vgrid(ABC):
     @abstractmethod
     def get_xyz(self, gr3, crs=None):
         pass
-
-    def write(self, path, overwrite=False):
-        path = pathlib.Path(path)
-        if path.is_file() and not overwrite:
-            raise Exception(
-                'File exists, pass overwrite=True to allow overwrite.')
-
-        with open(path, 'w') as f:
-            f.write(str(self))
 
     @property
     def ivcor(self):
@@ -266,8 +258,10 @@ class LSC2(Vgrid):
         for m, hsmi in enumerate(self.hsm):
             if m==0:
                 fp=dp<=self.hsm[m]
-                ind1[fp]=0; ind2[fp]=0
-                rat[fp]=0; nlayer[fp]=self.nv[0]
+                ind1[fp]=0; 
+                ind2[fp]=0
+                rat[fp]=0; 
+                nlayer[fp]=self.nv[0]
             else:
                 fp=(dp>self.hsm[m-1])*(dp<=self.hsm[m])
                 ind1[fp]=m-1
@@ -275,29 +269,69 @@ class LSC2(Vgrid):
                 rat[fp]=(dp[fp]-self.hsm[m-1])/(self.hsm[m]-self.hsm[m-1])
                 nlayer[fp]=self.nv[m]
 
-        #Find the last non NaN node and fills the NaN values with it
+        #Find the last non NaN node and fill with NaN values
         last_non_nan = (~np.isnan(self.m_grid)).cumsum(1).argmax(1)
-        z_mas=np.array([np.nan_to_num(z_mas_arr,nan=z_mas_arr[last_non_nan[i]])\
-                        for i, z_mas_arr in enumerate(self.m_grid)])
+        z_mas=np.array([np.nan_to_num(z_mas_arr,nan=z_mas_arr[last_non_nan[i]]) for i, z_mas_arr in enumerate(self.m_grid)])
         znd=z_mas[ind1]*(1-rat[:,None])+z_mas[ind2]*rat[:,None]; #z coordinate
         for i in np.arange(len(gd.nodes.id)):
             znd[i,nlayer[i]-1]=-dp[i]
             znd[i,nlayer[i]:]=np.nan
+         
         snd=znd/dp[:,None]; #sigma coordinate
 
-        #check vgrid
-        for i in np.arange(len(gd.nodes.id)):
-            for k in np.arange(self.nv[-1]-1):
-                if znd[i,k]<=znd[i,k+1]:
-                    raise TypeError(f'wrong vertical layers')
+        # QC check on vgird
+ 
+        # for i in np.arange(len(gd.nodes.id)):
+        #     for k in np.arange(self.nv[-1]-1):
+                
+        #         # original check
+        #         if znd[i,k]<=znd[i,k+1]:
+        #             raise ValueError(f'wrong vertical layers')
 
+        #         # check if sigma coord is within 6 decimal places of its neighbor 
+        #         # - this will throw an error in schism, since it thinks the sigma layers are the same
+        #         # - write method only goes to 6 decimal places
+        #         if snd[i,k]<snd[i,k+1] or np.isclose(snd[i,k], snd[i,k+1], atol=1e-6, rtol=0.0):
+        #             snd[i,k+1] = np.nan
+        #             znd[i,k+1] = np.nan
+        #             warnings.warn(
+        #                 f"wrong vertical layers setting snd[{i},{k+1}] to np.nan",
+        #                 RuntimeWarning,
+        #                 stacklevel=2,
+        #             )
+
+        # --- 1) Fatal check: z must be strictly decreasing with k ---
+        bad_z = (znd[:, :-1] <= znd[:, 1:])          # shape (n_nodes, n_levels-1)
+        if np.any(bad_z):
+            i, k = np.argwhere(bad_z)[0]             # first offending pair
+            raise ValueError(f"wrong vertical layers at node {i}, levels {k}->{k+1}: "
+                            f"znd={znd[i,k]} <= {znd[i,k+1]}")
+
+        # --- 2) Sigma check: neighbor is >= within 1e-6 (or increasing) ---
+        bad_sigma_pair = (snd[:, :-1] < snd[:, 1:]) | np.isclose(
+            snd[:, :-1], snd[:, 1:], atol=1e-6, rtol=0.0
+        )
+
+        # We want to NaN the *upper* neighbor (k+1) wherever the pair (k,k+1) is bad:
+        bad_sigma = np.zeros_like(snd, dtype=bool)
+        bad_sigma[:, 1:] = bad_sigma_pair
+
+        snd[bad_sigma] = np.nan
+        znd[bad_sigma] = np.nan
+
+        # Warnings: emitting one per hit can dominate runtime; summarize instead
+        n_bad = int(bad_sigma.sum())
+        if n_bad:
+            warnings.warn(f"wrong vertical layers: set {n_bad} snd/znd entries to NaN "
+                        f"(sigma layers too close within 1e-6)", RuntimeWarning, stacklevel=2)
+                    
+        # set properties
         self._znd = znd
         self._snd = snd
         self.sigma = np.fliplr(snd)
         self._nlayer = nlayer
 
-
-    def write(self, path, overwrite=False):
+    def write(self, path, overwrite=False, method: 1 | 2 = 1):
         '''
         write mg2lsc2 into vgrid.in
         Todo: enable writing from sigma only, to be done with the refactoring of the class.
@@ -306,26 +340,64 @@ class LSC2(Vgrid):
         if path.is_file() and not overwrite:
             raise Exception(
                 'File exists, pass overwrite=True to allow overwrite.')
+        print('writing:', str(path))
 
-        with open(path, 'w') as fid:
-            fid.write('           1 !average # of layers={:0.2f}\n          {} !nvrt\n'.format\
-                    (np.mean(self._nlayer),self.nvrt))
-            bli=[]#bottom level index
-            for i in np.arange(len(self._nlayer)):
-                nlayeri=self._nlayer[i]
-                si=np.flipud(self._snd[i,:nlayeri])
-                bli.append(self.nvrt-nlayeri+1)
-                fstr=f"         {self.nvrt-nlayeri+1:2}"
-                fid.write(fstr)
-            for i in range(self.nvrt):
-                fid.write(f'\n         {i+1}')
-                for n,bl in enumerate(bli):
-                    si=np.flipud(self._snd[n])
-                    if bl <= i+1:
-                        fid.write(f"      {si[i]:.6f}")
-                    else:
-                        fid.write(f"      {-9.:.6f}")
-            fid.close()
+        if method == 1:
+            with open(path, 'w') as fid:
+                fid.write('           1 !average # of layers={:0.2f}\n          {} !nvrt\n'.format\
+                        (np.mean(self._nlayer),self.nvrt))
+                bli=[]#bottom level index
+                for i in np.arange(len(self._nlayer)):
+                    nlayeri=self._nlayer[i]
+                    si=np.flipud(self._snd[i,:nlayeri])
+                    bli.append(self.nvrt-nlayeri+1)
+                    fstr=f"         {self.nvrt-nlayeri+1:2}"
+                    fid.write(fstr)
+                for i in range(self.nvrt):
+                    fid.write(f'\n         {i+1}')
+                    for n,bl in enumerate(bli):
+                        si=np.flipud(self._snd[n])
+                        if bl <= i+1:
+                            fid.write(f"      {si[i]:.6f}")
+                        else:
+                            fid.write(f"      {-9.:.6f}")
+                fid.close()
+
+        elif method == 2:
+
+            chunk=200_000
+            nvrt = int(self.nvrt)
+            n_nodes = int(len(self._nlayer))
+
+            nlayer = np.asarray(self._nlayer, dtype=np.int32)
+            bli = (nvrt - nlayer + 1).astype(np.int32)  # 1-based bottom level index
+            snd = self._snd                               # (n_nodes, nvrt)
+
+            with open(path, "w", buffering=64 * 1024 * 1024) as fid:
+                fid.write(
+                    f"           1 !average # of layers={float(nlayer.mean()):0.2f}\n"
+                    f"          {nvrt} !nvrt\n"
+                )
+
+                # ---- bottom indices line: TEXT mode (sep must be non-empty) + leading spaces
+                for s in range(0, n_nodes, chunk):
+                    e = min(s + chunk, n_nodes)
+                    fid.write("         ")                               # leading spaces before first value in this chunk
+                    bli[s:e].tofile(fid, sep="         ", format="%2d")  # 9 spaces between values
+
+                # ---- data lines
+                i=0
+                for i in tqdm(range(nvrt),desc=f"level {i}/{nvrt}",leave=False,mininterval=0.2):
+                    level = i + 1
+                    fid.write(f"\n         {level}")
+                    col = nvrt - 1 - i  # equivalent to flipud per-node without copying
+
+                    for s in range(0, n_nodes, chunk):
+                        e = min(s + chunk, n_nodes)
+                        mask = (bli[s:e] <= level)
+                        vals = np.where(mask, snd[s:e, col], -9.0)
+                        fid.write("      ")                              # leading spaces before first value in this chunk
+                        vals.tofile(fid, sep="      ", format="%.6f")    # 6 spaces between values
 
 
     @classmethod
@@ -404,6 +476,15 @@ class SZ(Vgrid):
 
     def get_xyz(self, gr3, crs=None):
         raise NotImplementedError('SZ.get_xyz')
+
+    def write(self, path, overwrite=False):
+        path = pathlib.Path(path)
+        if path.is_file() and not overwrite:
+            raise Exception(
+                'File exists, pass overwrite=True to allow overwrite.')
+
+        with open(path, 'w') as f:
+            f.write(str(self))
 
     @classmethod
     def open(cls, path):

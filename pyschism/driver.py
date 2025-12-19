@@ -213,8 +213,6 @@ class ModelDriver:
             dramp_ss = dramp_ss / timedelta(days=1)   
         if isinstance(drampwind,timedelta):
             drampwind = drampwind / timedelta(days=1)  
-        if isinstance(drampbc,timedelta):
-            drampbc = drampbc / timedelta(days=1)  
         if isinstance(drampwafo,timedelta):
             drampwafo = drampwafo / timedelta(days=1)  
         if isinstance(nhot_write, timedelta):
@@ -246,15 +244,15 @@ class ModelDriver:
         
         if self.config.vgrid.is2D():
             self.param.core.ibc = Stratification.BAROTROPIC
-            if self.config.forcings.baroclinic is not None:
-                self.param.core.ibtp = 1
+            # if self.config.forcings.baroclinic is not None:
+            self.param.core.ibtp = 1
         else:
             self.param.core.ibc = Stratification.BAROCLINIC
        
-        # If ibc=0, a baroclinic model is used and regardless of the value for ibtp, the transport equation is solved. 
-        # If ibc=1, a barotropic model is used, and the transport equation may (when ibtp=1) or may not (when ibtp=0) be solved; 
-        # When ibtp=1, S and T are treated as passive tracers.
-        self.param.core.ibc = self.config.stratification
+        # # If ibc=0, a baroclinic model is used and regardless of the value for ibtp, the transport equation is solved. 
+        # # If ibc=1, a barotropic model is used, and the transport equation may (when ibtp=1) or may not (when ibtp=0) be solved; 
+        # # When ibtp=1, S and T are treated as passive tracers.
+        # self.param.core.ibc = self.config.stratification
 
         # set opt
         self.param.opt.start_date = start_date

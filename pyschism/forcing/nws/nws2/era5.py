@@ -14,6 +14,7 @@ import netCDF4 as nc4
 from netCDF4 import Dataset
 import pandas as pd
 from matplotlib.transforms import Bbox
+from tqdm import tqdm
 
 from pyschism.forcing.nws.nws2.sflux import (
     SfluxDataset,
@@ -261,7 +262,7 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
     times=[i/24 for i in np.arange(0, 24, output_interval)]
 
     if air is True:
-        with Dataset(OUTDIR / f"sflux_air_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset(OUTDIR / f"sflux_air_{level}.{iday+1}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -335,7 +336,7 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
             dst['vwind'][:,:,:]=ds['v10'][idx:idx+25:output_interval, ::-1, :]
 
     if prc is True:
-        with Dataset(OUTDIR / f"sflux_prc_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset(OUTDIR / f"sflux_prc_{level}.{iday+1}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -371,7 +372,7 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
             dst['prate'][:,:,:]=ds['mtpr'][idx:idx+25:output_interval, ::-1, :]
 
     if rad is True:
-        with Dataset( OUTDIR / f"sflux_rad_{level}.{iday+1:04}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
+        with Dataset( OUTDIR / f"sflux_rad_{level}.{iday+1}.nc", 'w', format='NETCDF3_CLASSIC') as dst:
             dst.setncatts({"Conventions": "CF-1.0"})
             # dimensions
             dst.createDimension('nx_grid', nx_grid.shape[1])
@@ -417,19 +418,25 @@ def put_sflux_fields(iday, date, timevector, ds, nx_grid, ny_grid, air, rad, prc
 class ERA5(SfluxDataset):
 
     def __init__(self, **kwargs):
+        # defaults
+        self.prmsl_name  = "prmslmsl"
+        self.spfh_name   = "spfh2m"
+        self.stmp_name   = "tmpsfc"
+        self.uwind_name  = "ugrd10m"
+        self.vwind_name  = "vgrd10m"
+        self.prate_name  = "pratesfc"
+        self.dlwrf_name  = "dlwrfsfc"
+        self.dswrf_name  = "dswrfsfc"
+        self.air         = None
+        self.prc         = None
+        self.rad         = None
+        self.datadir     = None
 
-        self.prmsl_name = 'prmslmsl'
-        self.spfh_name = 'spfh2m'
-        self.stmp_name = 'tmpsfc'
-        self.uwind_name = 'ugrd10m'
-        self.vwind_name = 'vgrd10m'
-        self.prate_name = 'pratesfc'
-        self.dlwrf_name = 'dlwrfsfc'
-        self.dswrf_name = 'dswrfsfc'    
-        self.air = None
-        self.prc = None
-        self.rad = None
-        self.datadir = None 
+        # apply kwargs (only if the attribute exists)
+        for k, v in kwargs.items():
+            if not hasattr(self, k):
+                raise TypeError(f"Unknown keyword argument: {k!r}")
+            setattr(self, k, v)
 
     def write(
         self,
@@ -447,7 +454,10 @@ class ERA5(SfluxDataset):
     ):
         self.start_date=start_date
         self.rnday=rnday
-        end_date=self.start_date+timedelta(self.rnday)
+        if isinstance(self.rnday,timedelta):
+            end_date=self.start_date+self.rnday
+        else:
+            end_date=self.start_date+timedelta(self.rnday)
 
         if self.start_date.hour != 0:
             raise ValueError(f"Start datetime hour different than 0.\
@@ -484,8 +494,18 @@ class ERA5(SfluxDataset):
         #     put_sflux_fields(iday, date, times, ds, nx_grid, ny_grid, air=air, rad=rad, prc=prc, output_interval=output_interval, OUTDIR=outdir)
 
         assert len(dates) == len(self.inventory.files) 
-        for iday, (date, file) in enumerate(zip(dates, self.inventory.files)):
-            ds=Dataset(file)
-            time1=ds['valid_time']
-            times=nc4.num2date(time1,units=time1.units,only_use_cftime_datetimes=False)
-            put_sflux_fields(iday, date, times, ds, nx_grid, ny_grid, air=air, rad=rad, prc=prc, output_interval=output_interval, OUTDIR=outdir, level=level)
+        for iday, (date, file) in enumerate(tqdm(zip(dates, self.inventory.files),
+                                                total=len(dates),
+                                                desc="Writing sflux files")):
+            ds = Dataset(file)
+            try:
+                time1 = ds["valid_time"]
+                times = nc4.num2date(time1, units=time1.units, only_use_cftime_datetimes=False)
+                put_sflux_fields(
+                    iday, date, times, ds, nx_grid, ny_grid,
+                    air=air, rad=rad, prc=prc,
+                    output_interval=output_interval,
+                    OUTDIR=outdir, level=level
+                )
+            finally:
+                ds.close()

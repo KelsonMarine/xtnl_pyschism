@@ -118,7 +118,8 @@ class Shapiro(Gr3Field):
         https://github.com/wzhengui/pylibs/blob/1ee35efaa2d52fa682113126d84846ba33318f99/Utility/schism_file.py#L265
         """
         hgrid = hgrid.copy()
-        hgrid.nodes.transform_to_cpp(lonc, latc)
+        if hgrid.crs.is_geographic:
+            hgrid.nodes.transform_to_cpp(lonc, latc)
         xy = hgrid.nodes.coords
         x = xy[:, 0]
         y = xy[:, 1]
@@ -195,6 +196,8 @@ class Shapiro(Gr3Field):
         if regions is not None:
             for reg, value, flag in zip(regions, shapiro_vals2, flags):
                 shapiro.modify_by_region(hgrid, reg, value, depths[0], flag)
+
+        shapiro.nodes._crs = hgrid.crs
 
         return shapiro
 

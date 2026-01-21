@@ -309,6 +309,6 @@ class WWM_Param:
         self.nml.uppercase = True
 
         # Write the updated namelist
-        f90nml.write(self.nml, filename,force=force,sort=sort)
+        f90nml.write(self.nml, filename, force=force, sort=sort)
 
         print(f"Namelist written to {filename}")

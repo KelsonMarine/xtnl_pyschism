@@ -380,7 +380,7 @@ class ModelDriver:
                     wwm_bouc ={
                         'lbcse': True,
                         'lbinter' : True,
-                        'lbcwa' : False,
+                        'lbcwa' : True,
                         'lbcsp' : False,
                         'linhom' : True,
                         'lbsp1d' : False,

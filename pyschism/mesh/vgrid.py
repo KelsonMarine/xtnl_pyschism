@@ -184,57 +184,35 @@ class LSC2(Vgrid):
 
                 #normalize z_mas
                 z_mas[m]=-(z_mas[m]-z_mas[m,0])*hsmi/(z_mas[m,nvi-1]-z_mas[m,0])
-            s_mas=np.array([z_mas[i]/self.hsm[i] for i in np.arange(self.nhm)])
-
+                if min(z_mas[m,:self.nv[m]]-z_mas[m+1,:self.nv[m]])<0: 
+                    warnings.warn('check: master grid layer={}, hsm={}, nv={}'.format(m+1,self.hsm[m+1],self.nv[m+1]))
             self.m_grid = z_mas
-
-    # def make_m_plot(self):
-    #     '''
-    #     plot master grid
-    #     Adapted from:
-    #     https://github.com/wzhengui/pylibs/blob/master/pyScripts/gen_vqs.py
-    #     '''        
-    #     #check master grid
-    #     for i in np.arange(self.nhm-1):
-    #         if min(self.m_grid[i,:self.nv[i]]-self.m_grid[i+1,:self.nv[i]])<0: \
-    #             print('check: master grid layer={}, hsm={}, nv={}'.\
-    #                   format(i+1,self.hsm[i+1],self.nv[i+1]))
-
-    #     #plot master grid
-    #     figure(figsize=[10,5])
-    #     for i in np.arange(self.nhm): plot(i*np.ones(self.nv[-1]),\
-    #                                        self.m_grid[i],'k-',lw=0.3)
-    #     for k in np.arange(self.nv[-1]): plot(np.arange(self.nhm),\
-    #                                         self.m_grid.T[k],'k-',lw=0.3)
-    #     setp(gca(),xlim=[-0.5,self.nhm-0.5],ylim=[-self.hsm[-1],0.5])
-    #     gcf().tight_layout()
+            # self.z_mas = z_mas
+            # self.s_mas=np.array([z_mas[i]/self.hsm[i] for i in np.arange(self.nhm)])
     
     def make_m_plot(self, axes=None):
-        """
-        Plot master grid on provided axes or use current axes.
-        """
+        '''
+        plot master grid
+        Adapted from:
+        https://github.com/wzhengui/pylibs/blob/master/pyScripts/gen_vqs.py
+        '''   
         import matplotlib.pyplot as plt
-
         for i in np.arange(self.nhm - 1):
             if np.min(self.m_grid[i, :self.nv[i]] - self.m_grid[i + 1, :self.nv[i]]) < 0:
                 print(f'check: master grid layer={i+1}, hsm={self.hsm[i+1]}, nv={self.nv[i+1]}')
-
         if axes is None:
             fig, axes = plt.subplots(figsize=[10, 5])
-
-        # Use the axes object for plotting
         for i in np.arange(self.nhm): 
             axes.plot(i * np.ones(self.nv[i]), self.m_grid[i, :self.nv[i]], 'k-', lw=0.3)
         for k in np.arange(self.nv[-1]): 
             axes.plot(np.arange(self.nhm), self.m_grid.T[k], 'k-', lw=0.3)
-
         axes.set_xlim([-0.5, self.nhm - 0.5])
         axes.set_ylim([-self.hsm[-1], 0.5])
         axes.set_title("Master VGrid")
         axes.set_xlabel("Vertical Column Index")
         axes.set_ylabel("Depth [m]")
 
-    def calc_lsc2_att(self, gr3, crs=None):
+    def calc_lsc2_att(self, gr3, dz_bot_min=0.1, dt_crs=None):
         '''
         master grid to lsc2:
         compute vertical layers at nodes
@@ -266,13 +244,16 @@ class LSC2(Vgrid):
                 fp=(dp>self.hsm[m-1])*(dp<=self.hsm[m])
                 ind1[fp]=m-1
                 ind2[fp]=m
-                rat[fp]=(dp[fp]-self.hsm[m-1])/(self.hsm[m]-self.hsm[m-1])
+                rat[fp]=(dp[fp]-self.hsm[m-1])/(self.hsm[m]-self.hsm[m-1]) # get ratio of neighboring master grids
                 nlayer[fp]=self.nv[m]
 
         #Find the last non NaN node and fill with NaN values
         last_non_nan = (~np.isnan(self.m_grid)).cumsum(1).argmax(1)
+
         z_mas=np.array([np.nan_to_num(z_mas_arr,nan=z_mas_arr[last_non_nan[i]]) for i, z_mas_arr in enumerate(self.m_grid)])
-        znd=z_mas[ind1]*(1-rat[:,None])+z_mas[ind2]*rat[:,None]; #z coordinate
+        # znd=z_mas[ind1]*(1-rat[:,None])+z_mas[ind2]*rat[:,None]; #z coordinate using ratio of neighboring grids
+        znd=z_mas[ind2] # z coordinate
+
         for i in np.arange(len(gd.nodes.id)):
             znd[i,nlayer[i]-1]=-dp[i]
             znd[i,nlayer[i]:]=np.nan
@@ -280,50 +261,56 @@ class LSC2(Vgrid):
         snd=znd/dp[:,None]; #sigma coordinate
 
         # QC check on vgird
- 
-        # for i in np.arange(len(gd.nodes.id)):
-        #     for k in np.arange(self.nv[-1]-1):
-                
-        #         # original check
-        #         if znd[i,k]<=znd[i,k+1]:
-        #             raise ValueError(f'wrong vertical layers')
 
-        #         # check if sigma coord is within 6 decimal places of its neighbor 
-        #         # - this will throw an error in schism, since it thinks the sigma layers are the same
-        #         # - write method only goes to 6 decimal places
-        #         if snd[i,k]<snd[i,k+1] or np.isclose(snd[i,k], snd[i,k+1], atol=1e-6, rtol=0.0):
-        #             snd[i,k+1] = np.nan
-        #             znd[i,k+1] = np.nan
-        #             warnings.warn(
-        #                 f"wrong vertical layers setting snd[{i},{k+1}] to np.nan",
-        #                 RuntimeWarning,
-        #                 stacklevel=2,
-        #             )
-
-        # --- 1) Fatal check: z must be strictly decreasing with k ---
+        # check: z must be strictly decreasing with k
         bad_z = (znd[:, :-1] <= znd[:, 1:])          # shape (n_nodes, n_levels-1)
         if np.any(bad_z):
             i, k = np.argwhere(bad_z)[0]             # first offending pair
-            raise ValueError(f"wrong vertical layers at node {i}, levels {k}->{k+1}: "
-                            f"znd={znd[i,k]} <= {znd[i,k+1]}")
+            raise ValueError(f"wrong vertical layers at node {i}, levels {k}->{k+1}: znd={znd[i,k]} <= {znd[i,k+1]}")
 
-        # --- 2) Sigma check: neighbor is >= within 1e-6 (or increasing) ---
-        bad_sigma_pair = (snd[:, :-1] < snd[:, 1:]) | np.isclose(
-            snd[:, :-1], snd[:, 1:], atol=1e-6, rtol=0.0
-        )
+        # check: snd neighbor is >= within 1e-6 (or increasing) 
+        bad_sigma_pair = (snd[:, :-1] < snd[:, 1:]) | np.isclose(snd[:, :-1], snd[:, 1:], atol=1e-6, rtol=0.0)
 
-        # We want to NaN the *upper* neighbor (k+1) wherever the pair (k,k+1) is bad:
+        # NaN the *upper* neighbor (k+1) wherever the pair (k,k+1) is bad:
         bad_sigma = np.zeros_like(snd, dtype=bool)
         bad_sigma[:, 1:] = bad_sigma_pair
 
-        snd[bad_sigma] = np.nan
-        znd[bad_sigma] = np.nan
+        # snd[bad_sigma] = np.nan
+        # znd[bad_sigma] = np.nan
 
-        # Warnings: emitting one per hit can dominate runtime; summarize instead
         n_bad = int(bad_sigma.sum())
         if n_bad:
-            warnings.warn(f"wrong vertical layers: set {n_bad} snd/znd entries to NaN "
-                        f"(sigma layers too close within 1e-6)", RuntimeWarning, stacklevel=2)
+            raise ValueError(f"sigma layers too close (within 1e-6)")
+        
+            # forward differences along sigma level dimension (axis=1)            
+            tol = 1e-6
+            sigma = np.fliplr(snd)
+            ds = np.diff(sigma, axis=1)
+            # bad if not strictly increasing OR too close (<= tol)
+            bad_pair = (ds <= 0) | (ds <= tol)   # note: ds<=0 is included in ds<=tol, but kept for clarity
+            bad_nodes = bad_pair.any(axis=1)
+            n_bad = int(bad_nodes.sum())
+            print("# of bad nodes:", n_bad)
+            print(f"0-based index to node: {np.argwhere(bad_nodes)}")
+            if n_bad:
+                for ind in np.argwhere(bad_nodes).ravel():
+                    d = np.diff(sigma[ind, :].squeeze())
+                    bad_pts = np.zeros_like(sigma[ind, :], dtype=bool)
+                    bad_pts[1:] |= (d <= tol)
+                    bad_pts[:-1] |= (d <= tol)
+                    bad_pts[1:] |= (d <= 0)
+                    bad_pts[:-1] |= (d <= 0)
+                    arr = np.r_[np.nan, d]  # align diffs with sigma rows (first diff is undefined)
+                    print(f"node: {ind}, depth: {gd.values[ind]}")
+                    print("sigma coord:", np.array2string(sigma, formatter={'float_kind':lambda x: f"{x:.10f}"}))
+                    df = pd.DataFrame({
+                        "sigma": sigma[ind, :].squeeze(),
+                        "diff": arr,
+                        "bad_point": bad_pts,
+                    })
+                    print(df.to_string(float_format="{:.12e}".format))
+
+
                     
         # set properties
         self._znd = znd

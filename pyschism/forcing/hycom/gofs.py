@@ -232,8 +232,9 @@ class GOFSComponent(HycomComponent):
         if vgrid is not None:        
             nvrt=vgrid.sigma.shape[1]
 
-        if isinstance(self,GOFSSalinity) or isinstance(self,GOFSTemperature) or isinstance(self,GOFSVelocity) and vgrid is None:
-            raise RuntimeError('vgrid as input required')
+        if isinstance(self,GOFSSalinity) or isinstance(self,GOFSTemperature) or isinstance(self,GOFSVelocity):
+            if vgrid is None:
+                raise RuntimeError('vgrid as input required')
 
         if isinstance(self,GOFSElevation):
             #create netcdf
@@ -438,6 +439,7 @@ class GOFSElevation(GOFSComponent):
             dst['time_series'][i, offset:offset+len(zq)] = zq
             dst['time'][i] = i*86400.
         dst['time_step'][:] = 86400
+        dst.close()
         return dst
 
 class GOFSVelocity(GOFSComponent):
@@ -496,7 +498,7 @@ class GOFSVelocity(GOFSComponent):
                 f'approximated as {ds_timevector[time_idx]} for '
                 f'boundary id={boundary.id}'
                 )
-            bounds = boundary.geometry.bounds
+            bounds = boundary.geometry.total_bounds # return array with [minx, miny, maxx, maxy] over full geo data frame
             dx = (dataset['lon'][-1] - dataset['lon'][0]) / len(dataset['lon'])
             dy = (dataset['lat'][-1] - dataset['lat'][0]) / len(dataset['lat'])
             bounds = (
@@ -546,7 +548,13 @@ class GOFSVelocity(GOFSComponent):
             xi, yi = transform_ll_to_cpp(loni, lati)
 
             if vgrid.ivcor == 1:
-                bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
+                opbd=[]
+                for ibnd in list(range(boundary.shape[0])):
+                    opbd.extend(list(boundary.iloc[ibnd].indexes))
+                sigma=vgrid.sigma
+                sigma[np.isnan(sigma)]=-1
+                bz = (hgrid.values[:, None]*sigma)[opbd, :]
+                # bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
                 idxs = np.where(bz > 5000.0)
                 bz[idxs] = 5000.0 - 1.0e-6 
             else:
@@ -632,6 +640,7 @@ class GOFSVelocity(GOFSComponent):
             dst['time_series'][i, offset:offset+bz.shape[0], :, 1] = v_interp.reshape(bz.shape)
             dst['time'][i] = i*86400.
         dst['time_step'][:] = 86400
+        dst.close()
         return dst
 
 
@@ -691,7 +700,7 @@ class GOFSTemperature(GOFSComponent):
                 f'approximated as {ds_timevector[time_idx]} for '
                 f'boundary id={boundary.id}'
                 )
-            bounds = boundary.geometry.bounds
+            bounds = boundary.geometry.total_bounds # return array with [minx, miny, maxx, maxy] over full geo data frame
             dx = (dataset['lon'][-1] - dataset['lon'][0]) / len(dataset['lon'])
             dy = (dataset['lat'][-1] - dataset['lat'][0]) / len(dataset['lat'])
             bounds = (
@@ -747,10 +756,16 @@ class GOFSTemperature(GOFSComponent):
             xi, yi = transform_ll_to_cpp(loni, lati)
 
             if vgrid.ivcor == 1:
-                bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
+                opbd=[]
+                for ibnd in list(range(boundary.shape[0])):
+                    opbd.extend(list(boundary.iloc[ibnd].indexes))
+                sigma=vgrid.sigma
+                sigma[np.isnan(sigma)]=-1
+                bz = (hgrid.values[:, None]*sigma)[opbd, :]
+                # bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
                 idxs = np.where(bz > 5000.0)
                 bz[idxs] = 5000.0 - 1.0e-6
-                print(f'zcor at 200 is {bz[200,:]}')
+                # print(f'zcor at 200 is {bz[200,:]}')
             else:
                 raise NotImplementedError('vgrid.ivcor!=1')
 
@@ -807,6 +822,7 @@ class GOFSTemperature(GOFSComponent):
             dst['time_series'][i, offset:offset+bz.shape[0], :, :] = ptemp_interp.reshape(bz.shape)
             dst['time'][i] = i*86400.
         dst['time_step'][:] = 86400
+        dst.close()
         return dst
 
 
@@ -867,7 +883,7 @@ class GOFSSalinity(GOFSComponent):
                 f'approximated as {ds_timevector[time_idx]} for '
                 f'boundary id={boundary.id}'
                 )
-            bounds = boundary.geometry.bounds
+            bounds = boundary.geometry.total_bounds # return array with [minx, miny, maxx, maxy] over full geo data frame
             dx = (dataset['lon'][-1] - dataset['lon'][0]) / len(dataset['lon'])
             dy = (dataset['lat'][-1] - dataset['lat'][0]) / len(dataset['lat'])
             bounds = (
@@ -883,8 +899,8 @@ class GOFSSalinity(GOFSComponent):
                     dataset,
                     pixel_buffer
                 )
-            print(f'lon_idxs is {lon_idxs}')
-            print(f'lat_idxs is {lat_idxs}')
+            # print(f'lon_idxs is {lon_idxs}')
+            # print(f'lat_idxs is {lat_idxs}')
 
             # z_ui_idxs = list(range(dataset['depth'].shape[0]))
             z_idxs = list(range(dataset['depth'].shape[0]))  # TODO: subset?
@@ -912,8 +928,13 @@ class GOFSSalinity(GOFSComponent):
             xi, yi = transform_ll_to_cpp(loni, lati)
 
             if vgrid.ivcor == 1:
-                bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
-                print(f'zcor is {bz[200,:]}')
+                opbd=[]
+                for ibnd in list(range(boundary.shape[0])):
+                    opbd.extend(list(boundary.iloc[ibnd].indexes))
+                sigma=vgrid.sigma
+                sigma[np.isnan(sigma)]=-1
+                bz = (hgrid.values[:, None]*sigma)[opbd, :]
+                # bz = (hgrid.values[:, None]*vgrid.sigma)[boundary.indexes, :]
                 idxs = np.where(bz > 5000.0)
                 bz[idxs] = 5000.0 - 1.0e-6
             else:
@@ -969,6 +990,7 @@ class GOFSSalinity(GOFSComponent):
             dst['time_series'][i, offset:offset + bz.shape[0], :, :] = salt_interp.reshape(bz.shape)
             dst['time'][i] = i*86400.
         dst['time_step'][:] = 86400
+        dst.close()
         return dst
 
 

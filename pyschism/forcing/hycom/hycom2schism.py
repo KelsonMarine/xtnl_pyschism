@@ -24,6 +24,50 @@ from pyschism.mesh.vgrid import Vgrid
 
 logger = logging.getLogger(__name__)
 
+from netCDF4 import Dataset
+import numpy as np
+
+def save_netcdf4_dataset(src_ds: Dataset, out_path, *, format="NETCDF4", zlib=True, complevel=4):
+    """
+    Copy a netCDF4.Dataset (including remote OPeNDAP subset) to a local .nc file.
+    """
+    out_path = str(out_path)
+
+    # Create output file
+    with Dataset(out_path, "w", format=format) as dst:
+        # ---- global attributes ----
+        for attr in src_ds.ncattrs():
+            dst.setncattr(attr, src_ds.getncattr(attr))
+
+        # ---- dimensions ----
+        for dname, dim in src_ds.dimensions.items():
+            dst.createDimension(dname, (len(dim) if not dim.isunlimited() else None))
+
+        # ---- variables ----
+        for vname, var in src_ds.variables.items():
+            # Create variable with same dtype/dims
+            fill_value = getattr(var, "_FillValue", None)
+
+            create_kwargs = {}
+            if fill_value is not None:
+                create_kwargs["fill_value"] = fill_value
+
+            # Compression only works for NETCDF4/NETCDF4_CLASSIC
+            if format in ("NETCDF4", "NETCDF4_CLASSIC"):
+                create_kwargs.update({"zlib": zlib, "complevel": complevel})
+
+            dst_var = dst.createVariable(vname, var.datatype, var.dimensions, **create_kwargs)
+
+            # Copy variable attributes (except _FillValue which is handled on createVariable)
+            for attr in var.ncattrs():
+                if attr == "_FillValue":
+                    continue
+                dst_var.setncattr(attr, var.getncattr(attr))
+
+            # Copy data (this is what actually downloads/materializes the subset)
+            dst_var[:] = var[:]
+
+    return out_path
 
 def convert_longitude(ds, bbox):
 #https://stackoverflow.com/questions/53345442/about-changing-longitude-array-from-0-360-to-180-to-180-with-python-xarray
@@ -77,35 +121,17 @@ def get_database(date, Bbox=None):
         raise ValueError(f'No data fro {date}!')
     return database
 
-def get_idxs(date, database, bbox, lonc=None, latc=None, resource=None):
+def get_idxs(date, database, bbox, lonc=None, latc=None):
 
-
-    if resource is not None:
-        try:
-            if isinstance(resource,str) or  isinstance(resource,pathlib.Path):
-                ds = Dataset(resource)
-            else:
-                ds = MFDataset(resource) # data from DownloadHycom
-            lonvar='xlon'
-            latvar='ylat'
-            download_resource=False
-        except:
-            print(f'hycom2schism.py failed to open resource {resource} ... downloading from tds.hycom.org/thredds ...')
-            download_resource=True
+    if date >= datetime.utcnow():
+        date2 = datetime.utcnow() - timedelta(days=1)
+        baseurl = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[0:1:-1],lon[0:1:-1],time[0:1:-1]'
     else:
-        download_resource=True
+        baseurl=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[0:1:-1],lon[0:1:-1],time[0:1:-1],depth[0:1:-1]'
 
-    if download_resource:
-
-        if date >= datetime.utcnow():
-            date2 = datetime.utcnow() - timedelta(days=1)
-            baseurl = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[0:1:-1],lon[0:1:-1],time[0:1:-1]'
-        else:
-            baseurl=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[0:1:-1],lon[0:1:-1],time[0:1:-1],depth[0:1:-1]'
-
-        ds=Dataset(baseurl)
-        lonvar='lon'
-        latvar='lat'
+    ds=Dataset(baseurl)
+    lonvar='lon'
+    latvar='lat'
 
     time1=ds['time']
     times=nc.num2date(time1,units=time1.units,only_use_cftime_datetimes=False)
@@ -201,7 +227,7 @@ def interp_to_points_3d(dep, y2, x2, bxyz, val):
             # there seems to be an error here ... when bxyz comes from an LSC2 vgrid, there are nan values in the 0 column of bxyz
             val_int[idxs] = sp.interpolate.griddata(bxyz[~idxs,:][isgood], val_int[~idxs][isgood], bxyz[idxs,:],'nearest')
         except:
-            print('hycom2schism.interp_to_points_3d failed ... using nanmean to fill nans ... \n')
+            print(f'hycom2schism.interp_to_points_3d failed on {np.sum(idxs)} of {idxs.size} points ... using nanmean to fill nans ... \n')
             val_int[idxs] = np.nanmean(val_int,axis=0)
 
     idxs = np.isnan(val_int)
@@ -255,7 +281,7 @@ def ConvertTemp(salt, temp, dep):
 
 class OpenBoundaryInventory:
 
-    def __init__(self, hgrid, vgrid=None, ocean_bnd_ids: list = [0], resource=None):
+    def __init__(self, hgrid, vgrid=None, ocean_bnd_ids: list = [0]):
         self.hgrid = hgrid
         if vgrid is None:
             print('OpenBoundaryInventory using default Vgrid')
@@ -264,7 +290,6 @@ class OpenBoundaryInventory:
             vgrid = Vgrid.open(vgrid)
         self.vgrid = vgrid
         self.ocean_bnd_ids = ocean_bnd_ids
-        self.resource = resource
 
     def fetch_data(self, 
                    outdir: Union[str, os.PathLike], 
@@ -278,8 +303,20 @@ class OpenBoundaryInventory:
                    lats=None, 
                    msl_shifts=None,
                    ocean_bnd_ids = None, # can reset from initalized value
+                   overwrite = True,
+                   archivedir = None
                    ): 
         outdir = pathlib.Path(outdir)
+
+        if elev2D and not overwrite and pathlib.Path(outdir / 'elev2D.th.nc').exists():
+            elev2D = False
+            print(f'OpenBoundaryInventory.fetch_data setting elev2D=False (file exists: {outdir / "elev2D.th.nc"})')
+        if UV and not overwrite and pathlib.Path(outdir / 'UV3D.th.nc').exists():
+            UV = False
+            print(f'OpenBoundaryInventory.fetch_data setting UV=False (file exists: {outdir / "SAL_3D.th.nc"})')
+        if TS and not overwrite and pathlib.Path(outdir / 'SAL_3D.th.nc').exists() and pathlib.Path(outdir / 'TEM_3D.th.nc').exists():
+            TS = False
+            print(f'OpenBoundaryInventory.fetch_data setting TS=False (files exists: {outdir / "SAL_3D.th.nc"} and/or {"TEM_3D.th.nc"})')
 
         self.start_date = start_date
         if not isinstance(rnday,timedelta):
@@ -419,7 +456,7 @@ class OpenBoundaryInventory:
             dst_uv = Dataset(outdir / 'uv3D.th.nc', 'a', format='NETCDF4')
             time_idx_restart = dst_uv['time'][:].shape[0]
 
-        logger.info('**** Accessing GOFS data*****')
+        logger.info('**** Accessing GOFS data *****')
         t0=time()
 
         if restart == False:
@@ -431,8 +468,7 @@ class OpenBoundaryInventory:
             it0 = time_idx_restart-1
 
         for it1, date in enumerate(timevector):
-
-            it = it0 + it1
+            it = it0 + it1                
 
             database=get_database(date)
             logger.info(f'Data for {date} from database {database}')
@@ -469,43 +505,39 @@ class OpenBoundaryInventory:
                 xmin, xmax = np.min(blon), np.max(blon)
                 ymin, ymax = np.min(blat), np.max(blat)
                 bbox = Bbox.from_extents(xmin, ymin, xmax, ymax)
-
-                time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=blonc, latc=blatc, resource=self.resource)
-
-                if self.resource is not None:
-                    try:
-                        if isinstance(self.resource,str) or  isinstance(self.resource,pathlib.Path):
-                            ds = Dataset(self.resource)
-                        else:
-                            ds = MFDataset(self.resource) 
-                    except:
-                        use_database = True
-                else:
-                    use_database = True
                 
-                if use_database:
-                    if date >= datetime.utcnow():
-                        date2 = datetime.utcnow() - timedelta(days=1)
-                        url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
-                            f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
-                            f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
-                            f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
 
-                    else:
-                        url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
-                            f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
-                            f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-                    #logger.info(url)
+                time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=blonc, latc=blatc)
+            
+                if date >= datetime.utcnow():
+                    date2 = datetime.utcnow() - timedelta(days=1)
+                    url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
+                        f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
+                        f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
+                        f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
+                else:
+                    url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
+                        f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
+                        f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
+                
+                logger.info(url)
 
-                    ds=Dataset(url)
+                ds=Dataset(url)
+
+                if archivedir is not None: 
+                    out_file = archivedir / f"hycom_subset_{date:%Y%m%d}.nc"   # safer filename than raw datetime
+                    if not out_file.exists():
+                        save_netcdf4_dataset(ds, out_file)
+                        ds.close()
+                    ds=Dataset(out_file) # this is broken ... need to fix this
 
                 dep=ds['depth'][:]
 
@@ -686,7 +718,7 @@ class Nudge:
 
         vd=Vgrid.open(vgrid)
         sigma=vd.sigma
-
+        sigma[np.isnan(sigma)]=-1
         #define nudge zone and strength
         rlmax = 1.5 if rlmax is None else rlmax
         rnu_day = 0.25 if rnu_day is None else rnu_day

@@ -20,14 +20,13 @@ class PlotOutputCombined:
             self.parent = pathlib.Path(path[0]).parent
             self.files = path
             self.name = self.files[0].name
-            self.ds = xr.open_mfdataset(self.files)
     
         elif isinstance(path,os.PathLike):
             self.parent = pathlib.Path(path).parent
             self.files = pathlib.Path(path)
             self.name = self.files.name
-            self.ds = xr.open_dataset(self.files)
 
+        self.ds = xr.open_mfdataset(self.files,parallel=True,engine='h5netcdf')
             
         # Extract variable names that end with X or Y
         vars_xy = [var for var in self.ds.data_vars if re.search(r'(X|Y)$', var)]
@@ -38,7 +37,8 @@ class PlotOutputCombined:
             base = var[:-1]  # remove trailing X or Y
             groups.setdefault(base, []).append(var)
 
-        # Find groups that have both X and Y
+        # Find groups that have both X and Y to append:
+        # - depthAverageVelMag, etc
         for base, vars_list in groups.items():
             if len(vars_list) == 2 and f"{base}X" in vars_list and f"{base}Y" in vars_list:
                 vx = self.ds[f"{base}X"]
@@ -61,6 +61,8 @@ class PlotOutputCombined:
     def plot(self, 
             variable, 
             index=None,
+            stat=None,
+            quantile=0.5,
             unit=None,
             show=False, 
             wireframe=False,
@@ -77,7 +79,9 @@ class PlotOutputCombined:
             fig=None,
             ax=None,
             triangulation=None,
-            show_cbar=True
+            show_cbar=True,
+            add_basemap=False,
+            ctx_kwargs={'crs':'EPSG:4326','source':contextily.providers.Esri.WorldImagery,'zoom':'auto'},
              ):
         
         # --- define mesh triangulation
@@ -89,20 +93,41 @@ class PlotOutputCombined:
 
             # Face connectivity (assume 1-based indexing)
             x,y=self.ds.SCHISM_hgrid_node_x.values,self.ds.SCHISM_hgrid_node_y.values
-            tri = self.ds['SCHISM_hgrid_face_nodes'].isel(time=index).values[:, :3] - 1
+            tri = self.ds['SCHISM_hgrid_face_nodes'].isel(time=index if index is not None else 0).values[:, :3] - 1
             triangulation = Triangulation(x, y, tri)
 
         # --- get output var at index
-        print(f'{variable}: time index={index} of {self.ds.time.shape[0]}')
-        val = self.ds[variable].isel(time=index).values
+        if index is not None:
+            print(f'{variable}: time index={index} of {self.ds.time.shape[0]}')
+            val = self.ds[variable].isel(time=index).values
+            title_str={np.datetime_as_string(self.ds.time.isel(time=index).values, unit='m')}
+        else:
+            print('calculating', stat)
+
+            # re-chunk
+            da = self.ds[variable]
+            da = da.chunk({"time": -1, "nSCHISM_hgrid_node": 5000})  
+
+            start_datetime=np.datetime_as_string(self.ds.time.isel(time=1).values, unit='m') 
+            end_datetime=np.datetime_as_string(self.ds.time.isel(time=-1).values, unit='m')
+            statstr = f'{quantile}{stat}' if stat =='quantile' else stat
+            title_str = f'{statstr} over {start_datetime} - {end_datetime}'
+            if stat == 'max':
+                val = da.max(dim='time').values
+            elif stat == 'mean':
+                val = da.mean(dim='time').values
+            elif stat == 'min':
+                val = da.min(dim='time').values
+            elif stat == 'quantile':
+                val = da.quantile(quantile,dim='time').values
 
         # --- mask
         if 'wetdry_elem' in self.ds.data_vars: 
-            triangulation.set_mask(self.ds['wetdry_elem'].isel(time=index).values)
+            triangulation.set_mask(self.ds['wetdry_elem'].isel(time=index if index is not None else 0).values)
         elif 'dryFlagNode' in self.ds.data_vars: 
             # mask triangles that touch any non-finite node value
             tri_masks = []
-            mask = self.ds['dryFlagNode'].isel(time=index) == 1
+            mask = self.ds['dryFlagNode'].isel(time=index if index is not None else 0) == 1
             val[mask] = np.nan
             nodes_finite = np.isfinite(val)
             bad_tri = ~nodes_finite[triangulation.triangles].all(axis=1)
@@ -111,7 +136,7 @@ class PlotOutputCombined:
             triangulation.set_mask(tri_mask)
             val=np.ma.array(val, mask=~np.isfinite(val))
         else:    
-            print(f'no mask applied in PlotOutputCombined.animation, index={index}')
+            print(f'no mask applied in PlotOutputCombined.aniplotmation, index={index if index is not None else 0}')
         
 
         # --- plot
@@ -144,7 +169,7 @@ class PlotOutputCombined:
             )
 
         if wireframe:
-            ax.triplot(triangulation, color='k', linewidth=0.05)
+            ax.triplot(triangulation, color='k', linewidth=0.05,alpha=0.5, zorder=5)
 
         ax.set_aspect('equal')
         # ax.axis('scaled')
@@ -153,6 +178,13 @@ class PlotOutputCombined:
         
         ax.set_xlabel('Longitude [deg E]')
         ax.set_ylabel('Latitude [deg N]')
+
+        if add_basemap:
+                crs=ctx_kwargs.get('crs',None)
+                source=ctx_kwargs.get('source',contextily.providers.Esri.WorldImagery)
+                zoom=ctx_kwargs.get('zoom','auto')
+                contextily.add_basemap(ax, crs=crs, source=source, zoom=zoom)
+
 
         if show_cbar:
             m = plt.cm.ScalarMappable(cmap=cmap)
@@ -165,9 +197,11 @@ class PlotOutputCombined:
             label = variable if not unit else f"{variable} [{unit}]"
             cbar.set_label(label)
 
-        ax.set_title(f"{variable} | {np.datetime_as_string(self.ds.time.isel(time=index).values, unit='m')}")
+        ax.set_title(f"{variable} | {title_str}")
         if show:
             plt.show()
+
+        return fig, ax
 
     def animation(
             self,
@@ -177,8 +211,8 @@ class PlotOutputCombined:
             savedir=pathlib.Path('./'),
             fname=None,
             fileformat='mp4',
-            fps=3,
-            dpi=150,
+            fps=30,
+            dpi=300,
             start_frame=0,
             end_frame=-1,
             figsize=None,
@@ -192,8 +226,8 @@ class PlotOutputCombined:
             ymax=None,
             vmin=None,
             vmax=None,
-            add_basemap=False,
-            ctx_opts={'crs':'EPSG:4326','source':contextily.providers.Esri.WorldImagery,'zoom':'auto'},
+            add_basemap=True,
+            ctx_kwargs={'crs':'EPSG:4326','source':contextily.providers.Esri.WorldImagery,'zoom':'auto'},
             show_vector_field=False,
             show_cbar=True,
         ):
@@ -242,11 +276,14 @@ class PlotOutputCombined:
         ax.set_ylabel('Latitude [deg N]')
         if add_basemap:
             print('adding basemap')
-            contextily.add_basemap(ax, crs=ctx_opts['crs'], source=ctx_opts['source'], zoom=ctx_opts['zoom'])
+            crs=ctx_kwargs.get('crs',None)
+            source=ctx_kwargs.get('source',contextily.providers.Esri.WorldImagery)
+            zoom=ctx_kwargs.get('zoom','auto')
+            contextily.add_basemap(ax, crs=crs, source=source, zoom=zoom)
         ax.set_aspect('equal')
 
         if wireframe:
-            ax.triplot(triangulation, color='k', linewidth=0.5, zorder=5)
+            ax.triplot(triangulation, color='k', linewidth=0.5, zorder=5,alpha=0.5)
 
         # -------------------------
         # First frame: draw once, cache artists, keep colorbar
@@ -355,6 +392,7 @@ class PlotOutputCombined:
         def update(index):
             return draw_frame(index, first=False)
 
+        print('saving ...')
         anim = mpl_animation.FuncAnimation(
             fig, update, frames=tqdm(frames, total=len(frames)), blit=False, interval=int(1000/max(fps,1))
         )
@@ -374,13 +412,14 @@ class PlotOutputCombined:
             if not isinstance(savedir,pathlib.Path):
                 savedir = pathlib.Path(savedir)
             outfile=savedir / fname
+            if outfile.suffix != '.mp4':
+                outfile=savedir / f'{fname}.mp4'
             anim.save(
                 outfile,
                 writer=writer,
                 dpi=dpi
             )
             print('Animation saved to: ', outfile)
-            
 
         if show:
             plt.show()

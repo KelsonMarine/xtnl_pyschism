@@ -20,7 +20,7 @@ from pyschism.forcing.nws.nws2 import NWS2
 from pyschism.forcing.nws.best_track import BestTrackForcing
 from pyschism.forcing.wwm.base import WWM, WWM_IBOUNDFORMAT_1, WWM_IBOUNDFORMAT_3, Directional_Spectra_Wave_Dataset
 from pyschism.forcing.hycom.hycom2schism import OpenBoundaryInventory as HycomOpenBoundaryInventory
-from pyschism.forcing.hycom.gofs import HycomComponent
+from pyschism.forcing.hycom.gofs import HycomComponent, GOFS
 
 # from pyschism.forcing.baroclinic import BaroclinicForcing
 from pyschism.forcing.bctides import Bctides
@@ -103,27 +103,6 @@ class ModelForcings:
                     source_sink = True,
                 )
 
-        if self.ocean is not None:
-            print('\nWriting ModelForcings.ocean ...')
-            if isinstance(self.ocean, HycomOpenBoundaryInventory):
-                ocean_bnd_ids = [] # get open boundaries where ocean forcing is applied 
-                for i, flags in enumerate(self.bctides_flags):
-                    if any(f in [4, 5] for f in flags):  
-                        ocean_bnd_ids.append(i)
-                self.ocean.fetch_data(
-                    outdir=output_directory,
-                    start_date=driver.param.opt.start_date,
-                    rnday=timedelta(days=driver.param.core.rnday+1),
-                    elev2D=True, 
-                    TS=True, 
-                    UV=True,
-                    ocean_bnd_ids=ocean_bnd_ids
-                    )
-                
-            elif isinstance(self.ocean,HycomComponent):
-                print('\nWriting ModelForcings.ocean.HycomComponent not implemented yet! ... skipping ...\n')
-
-
         if self.waves is not None:
             if isinstance(self.waves, WWM_IBOUNDFORMAT_3):
                 print('\nWriting ModelForcings.waves (iboundformat=3) ...')
@@ -144,6 +123,39 @@ class ModelForcings:
                     os.remove(wwminput_nml)
                     f90nml.write(nml, wwminput_nml,force=False,sort=False)
                     print(f'WWM_IBOUNDFORMAT_1.write() patched {wwminput_nml} (iboundformat=1)')
+
+        if self.ocean is not None:
+            print('\nWriting ModelForcings.ocean ...')
+            if isinstance(self.ocean, HycomOpenBoundaryInventory):
+                ocean_bnd_ids = [] # get open boundaries where ocean forcing is applied 
+                for i, flags in enumerate(self.bctides_flags):
+                    if any(f in [4, 5] for f in flags):  
+                        ocean_bnd_ids.append(i)
+                self.ocean.fetch_data(
+                    outdir=output_directory,
+                    start_date=driver.param.opt.start_date,
+                    rnday=timedelta(days=driver.param.core.rnday+1),
+                    elev2D=True, 
+                    TS=True, 
+                    UV=True,
+                    ocean_bnd_ids=ocean_bnd_ids,
+                    overwrite=overwrite
+                    )
+            elif isinstance(self.ocean, GOFS):
+                self.ocean.put_boundary_ncdata(
+                    hgrid=driver.config.hgrid,
+                    vgrid=driver.config.vgrid,
+                    start_date=driver.param.opt.start_date,
+                    run_days=timedelta(days=driver.param.core.rnday+1), # int or timedelta
+                    outdir=output_directory,
+                    overwrite=overwrite,
+                )
+                    # ocean_bnd_ids=ocean_bnd_ids, # not applied, but should be ... all data written to netcdf
+                    
+            elif isinstance(self.ocean,HycomComponent):
+                
+                print('\nWriting ModelForcings.ocean.HycomComponent not implemented yet! ... skipping ...\n')
+
 
 
 class Gr3FieldTypes(Enum):
@@ -537,12 +549,6 @@ class ModelDriver:
         if not (self.outdir / "outputs").exists():
             (self.outdir / "outputs").mkdir(parents=True, exist_ok=overwrite)
 
-        # Write ModelForcing objects    
-        print('writing model forcing files:')
-        self.config.forcings.write(
-            self, output_directory, overwrite,
-        )
-
         if hgrid is not False:
             hgrid = "hgrid.gr3" if hgrid is True else hgrid
             print('writing hgrid ... ')
@@ -575,7 +581,7 @@ class ModelDriver:
         if (self.config.waves is not None): # or (wwm_param is not False):
             self.wwm_param.write(
                 filename=self.outdir /  "wwminput.nml", 
-                force=True if overwrite else False, 
+                force=overwrite, 
                 sort=False # consider re-defining .write method so it is like Param.write()
                 )
 
@@ -603,11 +609,11 @@ class ModelDriver:
             os.symlink(self.outdir / 'hgrid.gr3','hgrid_WWM.gr3', False)
             obj_write(wwmbnd, self.config.wwmbnd, "wwmbnd.gr3", overwrite)
 
-        # # Write ModelForcing objects    
-        # print('writing model forcing files:')
-        # self.config.forcings.write(
-        #     self, output_directory, overwrite,
-        # )
+        # Write ModelForcing objects    
+        print('writing model forcing files:')
+        self.config.forcings.write(
+            self, output_directory, overwrite,
+        )
 
         MakefileDriver(self.server_config, hotstart=self.hotstart).write(
             self.outdir / "Makefile", overwrite
@@ -727,7 +733,7 @@ class ModelConfig(metaclass=ModelConfigMeta):
         # itrtype: itrtype.Itrtype = None,
         nws: NWS = None,
         source_sink: Union[List[SourceSink], SourceSink] = None,
-        ocean: HycomOpenBoundaryInventory=None, # TODO: add HycomComponent so that: Union[HycomOpenBoundaryInventory, HycomComponent]=None ... consider creating 'ocean' base class 
+        ocean: Union[HycomOpenBoundaryInventory, GOFS]=None, # TODO: fix GOFS for open boundaries that are not ocean; create 'ocean' base class?
         stratification: Union[int, str, Stratification] = None,
         albedo: gridgr3.Albedo = None,
         diffmin: gridgr3.Diffmin = None,

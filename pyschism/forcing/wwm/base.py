@@ -173,7 +173,8 @@ class WWM_IBOUNDFORMAT_3(WWM):
         # Write each variable to a separate NetCDF file and record the filenames in wwm_inputs.txt.
         # Adjust the output directory if needed (here, files are written to the current directory).
         if os.path.isfile(path / self.filewave) and not overwrite:
-            return (print(f'Did not write ww3_*.nc to file -- overwrite == False and files exist in {path}'))
+            print(f'Did not write ww3_*.nc to file -- overwrite == False and files exist in {path}')
+            return
         elif os.path.isfile(path / self.filewave) and overwrite: 
             os.remove(path / self.filewave)
 

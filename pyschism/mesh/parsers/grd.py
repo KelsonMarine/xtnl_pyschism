@@ -199,6 +199,7 @@ def read(resource: Union[str, os.PathLike], boundaries: bool = True, crs=True):
 def write(grd, path, overwrite=False):
     path = pathlib.Path(path)
     if path.is_file() and not overwrite:
-        raise Exception('File exists, pass overwrite=True to allow overwrite.')
+        print(f'{path} exists, pass overwrite=True to allow overwrite ... skipping ...')
+        return
     with open(path, 'w') as f:
         f.write(to_string(**grd))

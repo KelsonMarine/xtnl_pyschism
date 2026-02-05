@@ -156,8 +156,9 @@ class TimeHistoryFile(ABC):
 
     def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
         path = pathlib.Path(path)
-        if (path / self.filename).exists() and overwrite is not True:
-            raise IOError("File exists and overwrite is not True.")
+        if (path / self.filename).exists() and not overwrite:
+            print("File exists and overwrite is not True ... skipping ...")
+            return
         with open(path / self.filename, "w") as f:
             f.write(str(self))
 
@@ -237,7 +238,9 @@ class SourceSinkWriter:
     def write(self, path: Union[str, os.PathLike], overwrite: bool = False):
         path = pathlib.Path(path)
         if (path / self.filename).exists() and overwrite is not True:
-            raise IOError("File exists and overwrite is not True.")
+            print("File exists and overwrite is not True ... skipping ...")
+            return
+        
         with open(path / self.filename, "w") as f:
             f.write(str(self))
 
@@ -747,9 +750,9 @@ class HGridElementPairings:
             data = {}
             for i, dt in enumerate( [start_date + timedelta(days=i) for i in range(rnday.days+2)] ):
                 day_of_year = int(dt.strftime('%j'))
-                q_data = self.ds['Q'].sel(day=day_of_year).values
-                temp_data = self.ds['temp'].sel(day=day_of_year).values
-                salt_data = self.ds['salt'].sel(day=day_of_year).values
+                q_data = self.ds['Q'].sel(day=day_of_year,method='nearest').values
+                temp_data = self.ds['temp'].sel(day=day_of_year,method='nearest').values
+                salt_data = self.ds['salt'].sel(day=day_of_year,method='nearest').values
 
                 element_data = {}
                 for i in self.map.keys():

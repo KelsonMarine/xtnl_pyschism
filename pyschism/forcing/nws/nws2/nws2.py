@@ -12,6 +12,14 @@ from pyschism.mesh import gridgr3
 
 SFLUX_DEFAULTS = f90nml.read(pathlib.Path(__file__).parent / "sflux_inputs.txt")
 
+VALID_RANGES = {
+    "uwind": (-100.0, 100.0),
+    "vwind": (-100.0, 100.0),
+    "prmsl": (8.0e4, 1.2e5),
+    "stmp": (150.0, 350.0),
+    "spfh": (0.0, 0.1),
+}
+
 class NWS2(NWS):
     def __init__(
         self,
@@ -50,6 +58,10 @@ class NWS2(NWS):
         air=True,
         rad=True,
         prc=True,
+        fill_bad_values: bool = False,
+        bad_value_mode: str = "fill_value", # fill_value or nanmean
+        fill_value: float = -9999.0,
+        valid_ranges: dict = VALID_RANGES,
     ):
 
         # write sflux namelist
@@ -71,6 +83,10 @@ class NWS2(NWS):
                 prc=prc,
                 bbox=bbox,
                 overwrite=overwrite,
+                fill_bad_values=fill_bad_values,
+                bad_value_mode=bad_value_mode, # fill_value or nanmean
+                fill_value=fill_value,
+                valid_ranges=valid_ranges,
             )
         if self.sflux_2 is not None:
             self.sflux_2.write(
@@ -83,6 +99,10 @@ class NWS2(NWS):
                 prc=prc,
                 bbox=bbox,
                 overwrite=overwrite,
+                fill_bad_values=fill_bad_values,
+                bad_value_mode=bad_value_mode, # fill_value or nanmean
+                fill_value=fill_value,
+                valid_ranges=valid_ranges,
             )
         # # write windrot data
         if windrot is not False and self.windrot is not None:

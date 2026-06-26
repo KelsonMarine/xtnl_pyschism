@@ -307,6 +307,9 @@ class WWM_Param:
         """
         # Convert to uppercase for readability
         self.nml.uppercase = True
+        if pathlib.Path(filename).exists() and not force:
+            print(f'{filename} exists and force=False ... skipping')
+            return
 
         # Write the updated namelist
         f90nml.write(self.nml, filename, force=force, sort=sort)

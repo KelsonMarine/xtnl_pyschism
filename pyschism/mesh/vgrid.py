@@ -42,7 +42,6 @@ class VgridType(Enum):
     def _missing_(cls, name):
         raise ValueError(f'ivcor={name} is not a valid vgrid type.')
 
-
 class Vgrid(ABC):
 
     @abstractmethod
@@ -73,8 +72,7 @@ class Vgrid(ABC):
         https://github.com/wzhengui/pylibs/blob/master/Utility/schism_file.py
         '''
         with open(path) as f:
-            return VgridTypeDispatch[VgridType(
-                int(f.read().strip().split()[0])).name].value.open(path)
+            return VgridTypeDispatch[VgridType(int(f.read().strip().split()[0])).name].value.open(path)
 
     @abstractmethod
     def get_xyz(self, gr3, crs=None):
@@ -100,7 +98,7 @@ class Vgrid(ABC):
         return not self.is2D()
 
 
-class LSC2_original(Vgrid):
+class LSC2(Vgrid):
 
     def __init__(self, hsm, nv, h_c, theta_b, theta_f, sigma=None):
         '''
@@ -130,6 +128,14 @@ class LSC2_original(Vgrid):
             m: number of vertical layers
         '''
         return cls(hsm=None, nv=None, h_c=None, theta_b=None, theta_f=None, sigma=sigma)
+
+    @property
+    def nvrt(self):
+        return max(self._nlayer)  # may not be equal to self.nv[-1]
+
+    @property
+    def nhm(self):
+        return self.hsm.shape[0]
 
     def __str__(self):
         f = [
@@ -329,7 +335,7 @@ class LSC2_original(Vgrid):
         elif method == 2:
 
             chunk=200_000
-            nvrt = int(self.nvrt)
+            nvrt = int(self.nvrt) # max(self._nlayer) 
             n_nodes = int(len(self._nlayer))
 
             nlayer = np.asarray(self._nlayer, dtype=np.int32)
@@ -399,15 +405,8 @@ class LSC2_original(Vgrid):
 
         obj = cls.from_sigma(sigma)
         obj._nlayer = nlayer
+        obj._snd = np.fliplr(obj.sigma)
         return obj
-
-    @property
-    def nvrt(self):
-        return max(self._nlayer)  # may not be equal to self.nv[-1]
-
-    @property
-    def nhm(self):
-        return self.hsm.shape[0]
 
 
 class SZ(Vgrid):
@@ -507,7 +506,7 @@ class SZ(Vgrid):
     def nvrt(self):
         return self.sigma.shape[0]
 
-class LSC2(Vgrid):
+class VQS(Vgrid):
     """
     Python translation of the core algorithm in SCHISM Utility/Pre-Processing/gen_vqs_1.f90
     for ivcor=1 (VQS/LSC^2 master grids).
@@ -1075,6 +1074,7 @@ class LSC2(Vgrid):
         z = z0 * (zeta + h) + zeta
 
         return z, s, Cs
+
 
 class VgridTypeDispatch(Enum):
 

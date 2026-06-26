@@ -18,6 +18,7 @@ from pyschism.dates import localize_datetime
 _logger = logging.getLogger(__name__)
 
 
+
 class FieldsDescriptor:
 
     def __set__(self, obj, fields: cf.FieldList):
@@ -278,17 +279,67 @@ class BaseComponent(ABC):
     name: str = ''
 
     def write(
-            self, 
-            outdir: Union[str, os.PathLike], 
-            level: int,
-            overwrite: bool = False, 
-            start_date: datetime = None,
-            rnday: Union[float, int, timedelta] = None,
-            bbox = None
-              ):
+        self,
+        outdir: Union[str, os.PathLike],
+        level: int,
+        overwrite: bool = False,
+        start_date: datetime = None,
+        rnday: Union[float, int, timedelta] = None,
+        bbox=None,
+        fill_bad_values: bool = False,
+        bad_value_mode: str = "fill_value", # fill_value or nanmean
+        fill_value: float = -9999.0,
+        valid_ranges: dict = { "uwind": (-100.0, 100.0), "vwind": (-100.0, 100.0), "prmsl": (8.0e4, 1.2e5), "stmp": (150.0, 350.0), "spfh": (0.0, 0.1)}
+        ):
 
         assert level in [1, 2]
+        assert bad_value_mode in ["fill_value", "nanmean"]
+
         outdir = pathlib.Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        fill_value = np.float32(fill_value)
+        valid_ranges = {} if valid_ranges is None else valid_ranges
+
+        def _clean_arr2d(arr2d, varname):
+            """
+            Clean one 2D timestep before writing.
+
+            bad_value_mode='fill_value':
+                bad cells are written as _FillValue.
+
+            bad_value_mode='nanmean':
+                bad cells are replaced with np.nanmean(arr2d) for that timestep.
+            """
+            arr = np.ma.asarray(arr2d, dtype=np.float32)
+            arr = np.ma.filled(arr, np.nan).astype(np.float32)
+
+            bad = ~np.isfinite(arr)
+
+            if varname in valid_ranges:
+                vmin, vmax = valid_ranges[varname]
+                bad |= (arr < vmin) | (arr > vmax)
+
+            if not fill_bad_values:
+                return arr
+
+            if not np.any(bad):
+                return arr
+
+            if bad_value_mode == "fill_value":
+                arr[bad] = fill_value
+                return arr
+
+            if bad_value_mode == "nanmean":
+                good = ~bad
+                if np.any(good):
+                    arr[bad] = np.nanmean(arr[good]).astype(np.float32)
+                else:
+                    # If the entire timestep is bad, fall back to fill value.
+                    arr[:, :] = fill_value
+                return arr
+
+            raise ValueError(f"Unsupported bad_value_mode: {bad_value_mode}")
 
         if start_date is None:
             for vartype in self.var_types:
@@ -297,180 +348,362 @@ class BaseComponent(ABC):
                     start_date = np.min(variable.datetime_array)
 
         if start_date is not None:
-            # naive condition
             if start_date.tzinfo is None or start_date.tzinfo.utcoffset(start_date) is None:
-                start_date = pytz.timezone('UTC').localize(start_date)
+                start_date = pytz.timezone("UTC").localize(start_date)
             timezone = start_date.tzinfo
 
-        if isinstance(rnday,(float,int)):
+        if isinstance(rnday, (float, int)):
             rnday = timedelta(days=rnday)
 
         end_date = start_date + rnday
 
-        # base date used in netcdf
-        nc_start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone)
-                
-        # get lon / lat coords with bbox 
-        variable = getattr(self, self.var_types[0]) # use first var_type as 'driver' var for dimensions and lon lat time
+        nc_start_date = (
+            start_date
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone)
+        )
+
+        variable = getattr(self, self.var_types[0])
         lon = variable.nx_grids[0]
-        lat = variable.ny_grids[0] 
+        lat = variable.ny_grids[0]
         nx_grid_1 = variable.nx_grids[0].shape[1]
         ny_grid_0 = variable.ny_grids[0].shape[0]
 
         if bbox is not None:
-            # lat_indices = np.where((lat >= bbox.ymin-0.5) & (lat <= bbox.ymax+0.5))[0]
-            # lon_indices = np.where((lon >= bbox.xmin-0.5) & (lon <= bbox.xmax+0.5))[0]
-
             lon2d = lon.array
             lat2d = lat.array
 
-            lat_ok = np.ma.filled(            # <- function, not method
+            lat_ok = np.ma.filled(
                 (lat2d >= bbox.ymin - 0.1) & (lat2d <= bbox.ymax + 0.1),
-                False
+                False,
             )
             lon_ok = np.ma.filled(
                 (lon2d >= bbox.xmin - 0.1) & (lon2d <= bbox.xmax + 0.1),
-                False
+                False,
             )
 
             mask = lat_ok & lon_ok
             iy, ix = np.where(mask)
-            iy_min, iy_max, ix_min, ix_max = iy.min(), iy.max(), ix.min(), ix.max()
-            if ix.max() < lon.shape[1]:
-                ix_max = ix.max()+1
-            if ix.min() > lon.shape[1]: 
-                ix_min = max(ix.min()-1,0)
-            if iy.max() < lat.shape[0]:
-                iy_max = iy.max()+1
-            if ix.min() > lat.shape[0]: 
-                iy_min = max(iy.min()-1,0)
-            
-            # index of rectangular slice
-            iy_s, ix_s = slice(iy_min, iy_max), slice(ix_min, ix_max)  
 
-            lon = lon[iy_s,ix_s]
-            lat = lat[iy_s,ix_s]
+            if iy.size == 0 or ix.size == 0:
+                raise ValueError("bbox does not overlap source grid.")
+
+            iy_min = max(iy.min() - 1, 0)
+            iy_max = min(iy.max() + 2, lat.shape[0])
+            ix_min = max(ix.min() - 1, 0)
+            ix_max = min(ix.max() + 2, lon.shape[1])
+
+            iy_s, ix_s = slice(iy_min, iy_max), slice(ix_min, ix_max)
+
+            lon = lon[iy_s, ix_s]
+            lat = lat[iy_s, ix_s]
             nx_grid_1 = lon.shape[1]
             ny_grid_0 = lat.shape[0]
 
+        for i, field in enumerate(getattr(self, self.var_types[0]).get_fields(start_date, rnday)):
 
-        for i, field in enumerate(getattr(self,self.var_types[0]).get_fields(start_date, rnday)):
-            
-            # filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
-            filename = f"sflux_{self.name}_{level}.{i+1}.nc" # following schism v5.13.0 update
+            filename = f"sflux_{self.name}_{level}.{i + 1}.nc"
+
             if pathlib.Path(outdir / filename).exists() and not overwrite:
-                print(f'{outdir / filename} exists and overwrite={overwrite} ... skipping ...')
+                print(f"{outdir / filename} exists and overwrite={overwrite} ... skipping ...")
                 continue
-            else:
 
-                # --- Parse time
+            stack_cftime_array = field.construct("time").datetime_array
+            stack_datetime_list = [
+                localize_datetime(datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond))
+                for t in stack_cftime_array
+            ]
 
-                # cftime to datetime
-                stack_cftime_array = field.construct('time').datetime_array # returns subset array of cftime matching filename stack (i) 
-                stack_datetime_list = [
-                        localize_datetime(datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond))
-                        for t in stack_cftime_array
-                    ]
+            time_in_days_since_nc_start_date = np.array(
+                [(t - nc_start_date) / timedelta(days=1) for t in stack_datetime_list],
+                dtype="f8",
+            )
 
-                time_in_days_since_nc_start_date = [
-                        (t - nc_start_date) / timedelta(days=1) for t in stack_datetime_list
-                    ]
-                time_in_days_since_nc_start_date = np.array(time_in_days_since_nc_start_date,dtype='f8')
+            tarr = np.array(stack_datetime_list, dtype="datetime64[ns]")
+            time_mask = (tarr >= np.datetime64(start_date)) & (tarr <= np.datetime64(end_date))
+            ntime = time_in_days_since_nc_start_date[time_mask].size
 
-                # mask time dimension based on start_date and end_date
-                tarr = np.array(stack_datetime_list, dtype='datetime64[ns]')
-                time_mask = (tarr >= np.datetime64(start_date)) & (tarr <= np.datetime64(end_date))
-                ntime = time_in_days_since_nc_start_date[time_mask].size
+            print(f"    writing: {filename}")
 
-                print(f'    writing: {filename}')
-                with Dataset(outdir / filename, 'w',format='NETCDF3_CLASSIC') as dst:
+            with Dataset(outdir / filename, "w", format="NETCDF3_CLASSIC") as dst:
+
+                dst.setncatts({"Conventions": "CF-1.0"})
+
+                dst.createDimension("nx_grid", nx_grid_1)
+                dst.createDimension("ny_grid", ny_grid_0)
+                dst.createDimension("time", None)
+
+                dst.createVariable("lon", "f4", ("ny_grid", "nx_grid"))
+                dst["lon"].long_name = "Longitude"
+                dst["lon"].standard_name = "longitude"
+                dst["lon"].units = "degrees_east"
+                dst["lon"][:] = lon
+
+                dst.createVariable("lat", "f4", ("ny_grid", "nx_grid"))
+                dst["lat"].long_name = "Latitude"
+                dst["lat"].standard_name = "latitude"
+                dst["lat"].units = "degrees_north"
+                dst["lat"][:] = lat
+
+                dst.createVariable("time", "f8", ("time",))
+                dst["time"].long_name = "Time"
+                dst["time"].standard_name = "time"
+                dst["time"].units = (
+                    f"days since {nc_start_date.year}-"
+                    f"{nc_start_date.month}-"
+                    f"{nc_start_date.day} "
+                    "00:00:00+"
+                    f"{nc_start_date.tzinfo}"
+                )
+                dst["time"].base_date = (
+                    nc_start_date.year,
+                    nc_start_date.month,
+                    nc_start_date.day,
+                    0,
+                )
+                dst["time"][:] = time_in_days_since_nc_start_date[time_mask]
+
+                for vartype in self.var_types:
+                    variable = getattr(self, vartype)
+                    varname = variable.name
+
+                    vout = dst.createVariable(
+                        varname,
+                        "f4",
+                        ("time", "ny_grid", "nx_grid"),
+                        fill_value=fill_value,
+                    )
+
+                    vout.long_name = variable.long_name
+                    vout.standard_name = variable.standard_name
+                    vout.units = variable.units
+                    vout.missing_value = fill_value
+
+                    if fill_bad_values:
+                        vout.bad_value_mode = bad_value_mode
+
+                    if varname in valid_ranges:
+                        vout.valid_min = np.float32(valid_ranges[varname][0])
+                        vout.valid_max = np.float32(valid_ranges[varname][1])
+
+                    var_field_i = variable.get_fields(stack=i)[0]
+
+                    var_times_cf = var_field_i.construct("time").datetime_array
+                    if len(var_times_cf[time_mask]) != ntime:
+                        raise ValueError(
+                            f"{varname}: time length mismatch, stack {i}: "
+                            f"{len(var_times_cf[time_mask])} vs {ntime}"
+                        )
+
+                    k = 0
+                    for j, keep in enumerate(time_mask):
+                        if not keep:
+                            continue
+
+                        if bbox is None:
+                            arr2d = var_field_i.data[j, :, :].array
+                        else:
+                            arr2d = var_field_i.data[j, iy_s, ix_s].array
+
+                        arr2d = _clean_arr2d(arr2d, varname)
+
+                        vout[k, :, :] = arr2d
+                        k += 1
+
+    # def write(
+    #         self, 
+    #         outdir: Union[str, os.PathLike], 
+    #         level: int,
+    #         overwrite: bool = False, 
+    #         start_date: datetime = None,
+    #         rnday: Union[float, int, timedelta] = None,
+    #         bbox = None
+    #           ):
+
+    #     assert level in [1, 2]
+    #     outdir = pathlib.Path(outdir)
+
+    #     if start_date is None:
+    #         for vartype in self.var_types:
+    #             variable = getattr(self, vartype)
+    #             if start_date is None:
+    #                 start_date = np.min(variable.datetime_array)
+
+    #     if start_date is not None:
+    #         # naive condition
+    #         if start_date.tzinfo is None or start_date.tzinfo.utcoffset(start_date) is None:
+    #             start_date = pytz.timezone('UTC').localize(start_date)
+    #         timezone = start_date.tzinfo
+
+    #     if isinstance(rnday,(float,int)):
+    #         rnday = timedelta(days=rnday)
+
+    #     end_date = start_date + rnday
+
+    #     # base date used in netcdf
+    #     nc_start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone)
+                
+    #     # get lon / lat coords with bbox 
+    #     variable = getattr(self, self.var_types[0]) # use first var_type as 'driver' var for dimensions and lon lat time
+    #     lon = variable.nx_grids[0]
+    #     lat = variable.ny_grids[0] 
+    #     nx_grid_1 = variable.nx_grids[0].shape[1]
+    #     ny_grid_0 = variable.ny_grids[0].shape[0]
+
+    #     if bbox is not None:
+    #         # lat_indices = np.where((lat >= bbox.ymin-0.5) & (lat <= bbox.ymax+0.5))[0]
+    #         # lon_indices = np.where((lon >= bbox.xmin-0.5) & (lon <= bbox.xmax+0.5))[0]
+
+    #         lon2d = lon.array
+    #         lat2d = lat.array
+
+    #         lat_ok = np.ma.filled(            # <- function, not method
+    #             (lat2d >= bbox.ymin - 0.1) & (lat2d <= bbox.ymax + 0.1),
+    #             False
+    #         )
+    #         lon_ok = np.ma.filled(
+    #             (lon2d >= bbox.xmin - 0.1) & (lon2d <= bbox.xmax + 0.1),
+    #             False
+    #         )
+
+    #         mask = lat_ok & lon_ok
+    #         iy, ix = np.where(mask)
+    #         iy_min, iy_max, ix_min, ix_max = iy.min(), iy.max(), ix.min(), ix.max()
+    #         if ix.max() < lon.shape[1]:
+    #             ix_max = ix.max()+1
+    #         if ix.min() > lon.shape[1]: 
+    #             ix_min = max(ix.min()-1,0)
+    #         if iy.max() < lat.shape[0]:
+    #             iy_max = iy.max()+1
+    #         if ix.min() > lat.shape[0]: 
+    #             iy_min = max(iy.min()-1,0)
+            
+    #         # index of rectangular slice
+    #         iy_s, ix_s = slice(iy_min, iy_max), slice(ix_min, ix_max)  
+
+    #         lon = lon[iy_s,ix_s]
+    #         lat = lat[iy_s,ix_s]
+    #         nx_grid_1 = lon.shape[1]
+    #         ny_grid_0 = lat.shape[0]
+
+
+    #     for i, field in enumerate(getattr(self,self.var_types[0]).get_fields(start_date, rnday)):
+            
+    #         # filename = f"sflux_{self.name}_{level}.{i+1:04d}.nc"
+    #         filename = f"sflux_{self.name}_{level}.{i+1}.nc" # following schism v5.13.0 update
+    #         if pathlib.Path(outdir / filename).exists() and not overwrite:
+    #             print(f'{outdir / filename} exists and overwrite={overwrite} ... skipping ...')
+    #             continue
+    #         else:
+
+    #             # --- Parse time
+
+    #             # cftime to datetime
+    #             stack_cftime_array = field.construct('time').datetime_array # returns subset array of cftime matching filename stack (i) 
+    #             stack_datetime_list = [
+    #                     localize_datetime(datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond))
+    #                     for t in stack_cftime_array
+    #                 ]
+
+    #             time_in_days_since_nc_start_date = [
+    #                     (t - nc_start_date) / timedelta(days=1) for t in stack_datetime_list
+    #                 ]
+    #             time_in_days_since_nc_start_date = np.array(time_in_days_since_nc_start_date,dtype='f8')
+
+    #             # mask time dimension based on start_date and end_date
+    #             tarr = np.array(stack_datetime_list, dtype='datetime64[ns]')
+    #             time_mask = (tarr >= np.datetime64(start_date)) & (tarr <= np.datetime64(end_date))
+    #             ntime = time_in_days_since_nc_start_date[time_mask].size
+
+    #             print(f'    writing: {filename}')
+    #             with Dataset(outdir / filename, 'w',format='NETCDF3_CLASSIC') as dst:
                                         
-                    dst.setncatts({"Conventions": "CF-1.0"})
+    #                 dst.setncatts({"Conventions": "CF-1.0"})
 
-                    # dimensions
-                    dst.createDimension('nx_grid',nx_grid_1)
-                    dst.createDimension('ny_grid',ny_grid_0)
-                    dst.createDimension('time',None)
-                    # variables
-                    # lon
-                    dst.createVariable('lon', 'f4', ('ny_grid', 'nx_grid'))
-                    dst['lon'].long_name = "Longitude"
-                    dst['lon'].standard_name = "longitude"
-                    dst['lon'].units = "degrees_east"
-                    dst['lon'][:] = lon
-                    # lat
-                    dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
-                    dst['lat'].long_name = "Latitude"
-                    dst['lat'].standard_name = "latitude"
-                    dst['lat'].units = "degrees_north"
-                    dst['lat'][:] = lat
+    #                 # dimensions
+    #                 dst.createDimension('nx_grid',nx_grid_1)
+    #                 dst.createDimension('ny_grid',ny_grid_0)
+    #                 dst.createDimension('time',None)
+    #                 # variables
+    #                 # lon
+    #                 dst.createVariable('lon', 'f4', ('ny_grid', 'nx_grid'))
+    #                 dst['lon'].long_name = "Longitude"
+    #                 dst['lon'].standard_name = "longitude"
+    #                 dst['lon'].units = "degrees_east"
+    #                 dst['lon'][:] = lon
+    #                 # lat
+    #                 dst.createVariable('lat', 'f4', ('ny_grid', 'nx_grid'))
+    #                 dst['lat'].long_name = "Latitude"
+    #                 dst['lat'].standard_name = "latitude"
+    #                 dst['lat'].units = "degrees_north"
+    #                 dst['lat'][:] = lat
 
-                    dst.createVariable('time', 'f8', ('time',)) # changed from f4 for more precision
-                    dst['time'].long_name = 'Time'
-                    dst['time'].standard_name = 'time'
-                    dst['time'].units = f'days since {nc_start_date.year}-' \
-                                        f'{nc_start_date.month}-'\
-                                        f'{nc_start_date.day} '\
-                                        '00:00:00+' \
-                                        f'{nc_start_date.tzinfo}'
-                    dst['time'].base_date = (
-                        nc_start_date.year,
-                        nc_start_date.month,
-                        nc_start_date.day,
-                        0)
+    #                 dst.createVariable('time', 'f8', ('time',)) # changed from f4 for more precision
+    #                 dst['time'].long_name = 'Time'
+    #                 dst['time'].standard_name = 'time'
+    #                 dst['time'].units = f'days since {nc_start_date.year}-' \
+    #                                     f'{nc_start_date.month}-'\
+    #                                     f'{nc_start_date.day} '\
+    #                                     '00:00:00+' \
+    #                                     f'{nc_start_date.tzinfo}'
+    #                 dst['time'].base_date = (
+    #                     nc_start_date.year,
+    #                     nc_start_date.month,
+    #                     nc_start_date.day,
+    #                     0)
 
-                    dst['time'][:] = time_in_days_since_nc_start_date[time_mask] 
+    #                 dst['time'][:] = time_in_days_since_nc_start_date[time_mask] 
 
-                    # --- this was writing all data to each netcdf for each time instance ... 
-                    # for vartype in self.var_types:
-                    #     variable = getattr(self, vartype)
-                    #     dst.createVariable(variable.name, 'f4', ('time', 'ny_grid', 'nx_grid'))
-                    #     for var_field in variable.get_fields(start_date, rnday):
-                    #         dst[variable.name][:] = field
-                    #         setattr(dst[variable.name], "long_name", variable.long_name)
-                    #         setattr(dst[variable.name], "standard_name", variable.standard_name)
-                    #         setattr(dst[variable.name], "units", variable.units)
+    #                 # --- this was writing all data to each netcdf for each time instance ... 
+    #                 # for vartype in self.var_types:
+    #                 #     variable = getattr(self, vartype)
+    #                 #     dst.createVariable(variable.name, 'f4', ('time', 'ny_grid', 'nx_grid'))
+    #                 #     for var_field in variable.get_fields(start_date, rnday):
+    #                 #         dst[variable.name][:] = field
+    #                 #         setattr(dst[variable.name], "long_name", variable.long_name)
+    #                 #         setattr(dst[variable.name], "standard_name", variable.standard_name)
+    #                 #         setattr(dst[variable.name], "units", variable.units)
 
-                    # ---- data variables (ONLY the i-th stack), streamed by time ----
-                    for vartype in self.var_types:
-                        variable = getattr(self, vartype)
-                        varname = variable.name
+    #                 # ---- data variables (ONLY the i-th stack), streamed by time ----
+    #                 for vartype in self.var_types:
+    #                     variable = getattr(self, vartype)
+    #                     varname = variable.name
 
-                        vout = dst.createVariable(varname, 'f4', ('time', 'ny_grid', 'nx_grid'))
-                        setattr(vout, "long_name",   variable.long_name)
-                        setattr(vout, "standard_name", variable.standard_name)
-                        setattr(vout, "units",       variable.units)
+    #                     vout = dst.createVariable(varname, 'f4', ('time', 'ny_grid', 'nx_grid'))
+    #                     setattr(vout, "long_name",   variable.long_name)
+    #                     setattr(vout, "standard_name", variable.standard_name)
+    #                     setattr(vout, "units",       variable.units)
 
-                        # # find ONLY the i-th stack for this variable without loading all stacks by iterating until i, then break
-                        # var_field_i = None
-                        # for k, var_field in enumerate(variable.get_fields(start_date, rnday)):
-                        #     if k == i:
-                        #         var_field_i = var_field
-                        #         break
-                        # if var_field_i is None:
-                        #     raise IndexError(f"{varname}: missing stack index {i}")
+    #                     # # find ONLY the i-th stack for this variable without loading all stacks by iterating until i, then break
+    #                     # var_field_i = None
+    #                     # for k, var_field in enumerate(variable.get_fields(start_date, rnday)):
+    #                     #     if k == i:
+    #                     #         var_field_i = var_field
+    #                     #         break
+    #                     # if var_field_i is None:
+    #                     #     raise IndexError(f"{varname}: missing stack index {i}")
 
-                        var_field_i = variable.get_fields(stack=i)[0]
+    #                     var_field_i = variable.get_fields(stack=i)[0]
 
-                        # verify var_field_i should have same # of times as 'field' from the driver
-                        # cf.Field: get time size via construct:
-                        var_times_cf = var_field_i.construct('time').datetime_array
-                        if len(var_times_cf[time_mask]) != ntime:
-                            raise ValueError(f"{varname}: time length mismatch (stack {i}):{len(var_times_cf)} vs {ntime}")
+    #                     # verify var_field_i should have same # of times as 'field' from the driver
+    #                     # cf.Field: get time size via construct:
+    #                     var_times_cf = var_field_i.construct('time').datetime_array
+    #                     if len(var_times_cf[time_mask]) != ntime:
+    #                         raise ValueError(f"{varname}: time length mismatch (stack {i}):{len(var_times_cf)} vs {ntime}")
 
-                        # Stream write each time slice to avoid loading the full 3D array
-                        # cf.Field supports .data[...] returning a dask-like subarray
-                        # use .array to realize just that slice ... 
-                        k = 0
-                        for j, keep in enumerate(time_mask):
-                            if not keep:
-                                continue
-                            if bbox is None:
-                                arr2d = var_field_i.data[j, :, :].array 
-                            else:
-                                arr2d = var_field_i.data[j, iy_s, ix_s].array  # use bbox derived slices for lat, lon
-                            vout[k, :, :] = arr2d
-                            k += 1
+    #                     # Stream write each time slice to avoid loading the full 3D array
+    #                     # cf.Field supports .data[...] returning a dask-like subarray
+    #                     # use .array to realize just that slice ... 
+    #                     k = 0
+    #                     for j, keep in enumerate(time_mask):
+    #                         if not keep:
+    #                             continue
+    #                         if bbox is None:
+    #                             arr2d = var_field_i.data[j, :, :].array 
+    #                         else:
+    #                             arr2d = var_field_i.data[j, iy_s, ix_s].array  # use bbox derived slices for lat, lon
+    #                         vout[k, :, :] = arr2d
+    #                         k += 1
 
         # # commented out code above did not account for start_date and rnday when dataset was initalized from a pathlib glob (i.e. multiple netcdf files)
         # # refactor to fix:
@@ -644,6 +877,11 @@ class SfluxDataset:
             rad=True,
             prc=True,
             bbox=None,
+            fill_bad_values: bool = False,
+            bad_value_mode: str = "fill_value", # fill_value or nanmean
+            fill_value: float = -9999.0,
+            valid_ranges: dict = { "uwind": (-100.0, 100.0), "vwind": (-100.0, 100.0), "prmsl": (8.0e4, 1.2e5), "stmp": (150.0, 350.0), "spfh": (0.0, 0.1)}
+,
     ):
 
         outdir = pathlib.Path(outdir)
@@ -654,17 +892,47 @@ class SfluxDataset:
         if hasattr(self, 'air'):
             if self.air is not None:
                 if air is True:
-                    self.air.write(outdir, level, overwrite, start_date, rnday, bbox)
+                    self.air.write(outdir, 
+                                    level, 
+                                    overwrite, 
+                                    start_date, 
+                                    rnday, 
+                                    bbox,
+                                    fill_bad_values=fill_bad_values,
+                                    bad_value_mode=bad_value_mode,
+                                    fill_value=fill_value,
+                                    valid_ranges=valid_ranges
+                                    )
 
         if hasattr(self, 'prc'):
             if self.prc is not None:
                 if prc is True:
-                    self.prc.write(outdir, level, overwrite, start_date, rnday, bbox)
+                    self.prc.write(outdir, 
+                                    level, 
+                                    overwrite, 
+                                    start_date, 
+                                    rnday, 
+                                    bbox,
+                                    fill_bad_values=fill_bad_values,
+                                    bad_value_mode=bad_value_mode,
+                                    fill_value=fill_value,
+                                    valid_ranges=valid_ranges
+                                    )
 
         if hasattr(self, 'rad'):
             if self.rad is not None:
                 if rad is True:
-                    self.rad.write(outdir, level, overwrite, start_date, rnday, bbox)
+                    self.rad.write(outdir, 
+                                    level, 
+                                    overwrite, 
+                                    start_date, 
+                                    rnday, 
+                                    bbox,
+                                    fill_bad_values=fill_bad_values,
+                                    bad_value_mode=bad_value_mode,
+                                    fill_value=fill_value,
+                                    valid_ranges=valid_ranges
+                                    )
 
     @property
     def timevector(self):

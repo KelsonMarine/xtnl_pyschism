@@ -8,7 +8,8 @@ import subprocess
 import shutil
 from typing import Union
 from time import time
-
+from tqdm.auto import tqdm
+import math
 import numpy as np
 import scipy as sp
 import requests
@@ -24,8 +25,8 @@ from pyschism.mesh.vgrid import Vgrid
 
 logger = logging.getLogger(__name__)
 
-from netCDF4 import Dataset
-import numpy as np
+# shared cache (module-level)
+HYCOM_COORD_CACHE = {}
 
 def save_netcdf4_dataset(src_ds: Dataset, out_path, *, format="NETCDF4", zlib=True, complevel=4):
     """
@@ -195,6 +196,146 @@ def get_idxs(date, database, bbox, lonc=None, latc=None):
 
     return time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, same
 
+def _hycom_coord_url_and_key(date, database):
+    """
+    Returns (baseurl, cache_key) for the coordinate-only dataset.
+    """
+    if date >= datetime.utcnow():
+        date2 = datetime.utcnow() - timedelta(days=1)
+        runstamp = date2.strftime("%Y-%m-%dT12:00:00Z")
+        baseurl = (
+            f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/'
+            f'GLBy0.08_930_FMRC_RUN_{runstamp}'
+            f'?depth[0:1:-1],lat[0:1:-1],lon[0:1:-1],time[0:1:-1]'
+        )
+        cache_key = (database, "fmrc", runstamp)
+    else:
+        baseurl = (
+            f'https://tds.hycom.org/thredds/dodsC/{database}'
+            f'?lat[0:1:-1],lon[0:1:-1],time[0:1:-1],depth[0:1:-1]'
+        )
+        cache_key = (database, "hindcast", None)
+
+    return baseurl, cache_key
+
+def get_idxs_and_time_range(day_start, database, bbox, lonc=None, latc=None, max_shift_days=3, cache=None):
+    """
+    Open HYCOM coords/time once (cached) and return:
+      t_start, t_end (inclusive indices for day_start <= time < day_start+1 day),
+      lon_idx1, lon_idx2, lat_idx1, lat_idx2,
+      x2, y2, isLonSame,
+      shifted_day_start (if missing data and shifted forward).
+
+    cache: dict
+      Optional external cache so callers can share state across runs/modules.
+      If None, uses module-level HYCOM_COORD_CACHE.
+    """
+    if cache is None:
+        cache = HYCOM_COORD_CACHE
+
+    baseurl, cache_key = _hycom_coord_url_and_key(day_start, database)
+
+    # ---- load coords/time from cache or server ----
+    if cache_key not in cache:
+        ds = Dataset(baseurl)
+
+        time_var = ds["time"]
+        times_py = nc.num2date(time_var[:], units=time_var.units, only_use_cftime_datetimes=False)
+
+        # Convert to numpy datetime64 for fast vector comparisons
+        times = np.array(times_py, dtype="datetime64[ns]")
+
+        lon = ds["lon"][:].astype(float)
+        lat = ds["lat"][:].astype(float)
+        depth = ds["depth"][:]  # not required for idx calc but often useful elsewhere
+
+        ds.close()
+
+        cache[cache_key] = {
+            "times": times,
+            "lon": lon,
+            "lat": lat,
+            "depth": depth,
+            "baseurl": baseurl,
+        }
+        logger.info(f"Cached HYCOM coords/time for {cache_key} (nt={times.size}, nlon={lon.size}, nlat={lat.size})")
+
+    entry = cache[cache_key]
+    times = entry["times"]
+    lon = entry["lon"].copy()  # copy because we may modify lon range
+    lat = entry["lat"]         # lat not modified
+    # depth = entry["depth"]   # available if needed
+
+    # ---- lon range check / convert like your original get_idxs() ----
+    isLonSame = True
+    if not (bbox.xmin >= lon.min() and bbox.xmax <= lon.max()):
+        isLonSame = False
+        if lon.min() >= 0:
+            logger.info('Convert HYCOM longitude from [0, 360) to [-180, 180):')
+            idxs = lon >= 180
+            lon[idxs] = lon[idxs] - 360
+        elif lon.min() <= 0:
+            logger.info('Convert HYCOM longitude from [-180, 180) to [0, 360):')
+            idxs = lon <= 0
+            lon[idxs] = lon[idxs] + 360
+
+    # ---- spatial indices ----
+    lat_idxs = np.where((lat >= bbox.ymin - 0.5) & (lat <= bbox.ymax + 0.5))[0]
+    lon_idxs = np.where((lon >= bbox.xmin - 0.5) & (lon <= bbox.xmax + 0.5))[0]
+
+    if lat_idxs.size == 0 or lon_idxs.size == 0:
+        raise ValueError("BBox does not intersect HYCOM lat/lon grid after lon conversion.")
+
+    lon_idx1 = int(lon_idxs[0])
+    lon_idx2 = int(lon_idxs[-1])
+    lat_idx1 = int(lat_idxs[0])
+    lat_idx2 = int(lat_idxs[-1])
+
+    lon_sub = lon[lon_idxs]
+    lat_sub = lat[lat_idxs]
+
+    if lonc is None:
+        lonc = float(lon_sub.mean())
+    if latc is None:
+        latc = float(lat_sub.mean())
+
+    x2, y2 = transform_ll_to_cpp(lon_sub, lat_sub, lonc, latc)
+
+    # ---- time range indices for the day ----
+    shifted_day_start = day_start
+    t_start = None
+    t_end = None
+    for shift in range(0, max_shift_days + 1):
+        ds_day_start = day_start + timedelta(days=shift)
+        ds_day_end = ds_day_start + timedelta(days=1)
+
+        start64 = np.datetime64(ds_day_start, "ns")
+        end64 = np.datetime64(ds_day_end, "ns")
+
+        idx = np.where((times >= start64) & (times < end64))[0]
+        if idx.size > 0 and t_start is None:
+            t_start = int(idx[0])
+            t_end = int(idx[-1])
+            shifted_day_start = ds_day_start
+
+    if t_start is None:
+        logger.info(f'No HYCOM time coverage found for {day_start} (or next {max_shift_days} days).')
+        return None, None, None, None, None, None, None, None, isLonSame, day_start
+
+    return (t_start, t_end, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, isLonSame, shifted_day_start)
+
+def floor_2_decimals(number):
+    """
+    Rounds a number down to exactly two decimal places.
+    """
+    return math.floor( number * 100) / 100
+
+def ceil_2_decimals(number):
+    """
+    Rounds a number up to two decimal places.
+    """
+    return math.ceil(number * 100) / 100.0
+
 def transform_ll_to_cpp(lon, lat, lonc=-77.07, latc=24.0):
     longitude=lon/180*np.pi
     latitude=lat/180*np.pi
@@ -207,6 +348,8 @@ def transform_ll_to_cpp(lon, lat, lonc=-77.07, latc=24.0):
     return np.array(lon_new), np.array(lat_new)
 
 def interp_to_points_3d(dep, y2, x2, bxyz, val):
+    # print(type(val), val.dtype, np.ma.isMaskedArray(val),'val shape',val.shape)
+    val = np.asanyarray(val).astype(float)
     idxs = np.where(abs(val) > 10000)
     val[idxs] = float('nan')
 
@@ -232,11 +375,13 @@ def interp_to_points_3d(dep, y2, x2, bxyz, val):
 
     idxs = np.isnan(val_int)
     if np.sum(idxs) != 0:
-        logger.info(f'There is still missing value for {val}')
+        logger.info(f'interp_to_points_3d error! There is still missing value for {val}')
         sys.exit()
     return val_int
 
 def interp_to_points_2d(y2, x2, bxy, val):
+    # print(type(val), val.dtype, np.ma.isMaskedArray(val))
+    val = np.asanyarray(val).astype(float)
     idxs = np.where(abs(val) > 10000)
     val[idxs] = float('nan')
 
@@ -304,9 +449,16 @@ class OpenBoundaryInventory:
                    msl_shifts=None,
                    ocean_bnd_ids = None, # can reset from initalized value
                    overwrite = True,
+                   archive_netcdf=False,
                    archivedir = None
                    ): 
         outdir = pathlib.Path(outdir)
+
+        if archive_netcdf:  # create new download dir
+            if archivedir is None:
+                archivedir = outdir
+            archivedir = pathlib.Path(f'{archivedir}/hycom/')
+            archivedir.mkdir(exist_ok=True,parents=True)  
 
         if elev2D and not overwrite and pathlib.Path(outdir / 'elev2D.th.nc').exists():
             elev2D = False
@@ -502,13 +654,15 @@ class OpenBoundaryInventory:
                     y2i=np.tile(yi,[nvrt,1]).T
                     bxyz=np.c_[zcor2.reshape(np.size(zcor2)),y2i.reshape(np.size(y2i)),x2i.reshape(np.size(x2i))]
 
-                xmin, xmax = np.min(blon), np.max(blon)
-                ymin, ymax = np.min(blat), np.max(blat)
+
+                xmin = floor_2_decimals(np.min(blon))
+                xmax = ceil_2_decimals(np.max(blon))
+                ymin= floor_2_decimals(np.min(blat))
+                ymax = ceil_2_decimals(np.max(blat))
                 bbox = Bbox.from_extents(xmin, ymin, xmax, ymax)
                 
-
                 time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=blonc, latc=blatc)
-            
+                            
                 if date >= datetime.utcnow():
                     date2 = datetime.utcnow() - timedelta(days=1)
                     url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
@@ -527,17 +681,25 @@ class OpenBoundaryInventory:
                         f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
                         f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
                         f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-                
                 logger.info(url)
-
-                ds=Dataset(url)
-
-                if archivedir is not None: 
-                    out_file = archivedir / f"hycom_subset_{date:%Y%m%d}.nc"   # safer filename than raw datetime
-                    if not out_file.exists():
-                        save_netcdf4_dataset(ds, out_file)
-                        ds.close()
-                    ds=Dataset(out_file) # this is broken ... need to fix this
+         
+                # Generate a local copy of the HYCOM file for future use
+                if archive_netcdf:
+                    hycom_fname = archivedir / f'hycom_{date.strftime("%Y%m%d_%H")}_{xmin:0.3f}_{xmax:0.3f}E__{ymin:0.3f}_{ymax:0.3f}N.nc'
+                    if not hycom_fname.exists():
+                        logger.info(f'Local copy of HYCOM file {hycom_fname} does not exist.')
+                        logger.info(f'Downloading HYCOM data from {database} ... ')
+                        xr.open_dataset(url).to_netcdf(hycom_fname)
+                        logger.info(f'Data saved to {hycom_fname.resolve()}')
+                    try:
+                        logger.info(f'Reading HYCOM file: {hycom_fname}')
+                        ds=Dataset(hycom_fname)
+                    except:
+                        logger.info(f'Failed to open local copy of HYCOM file {hycom_fname} ... Downloading...')
+                        ds=Dataset(url)
+                else:
+                    logger.info(f'Downloading HYCOM data from {database} ... ')
+                    ds=Dataset(url)
 
                 dep=ds['depth'][:]
 
@@ -619,6 +781,11 @@ class Nudge:
         set up nudge zone within rlmax distance from the ocean boundary;
         modify the nudging zone width rlmax.
         rlmax can be a uniform value, e.g., rlmax = 1.5 (degree if hgrid is lon/lat)
+
+        #rlmax - max relax distance in m or degree
+        #rnu_day - max relax strength in days 
+        #restart = True will append to the existing nc file, works when first try doesn't break.
+
         """
 
         outdir = pathlib.Path(outdir)
@@ -697,7 +864,7 @@ class Nudge:
 
     def fetch_data(
         self, outdir: Union[str, os.PathLike], vgrid, start_date, rnday, restart=False, rlmax=None, rnu_day=None,
-        hycom_download_dir=None,
+        archive_netcdf=False,archivedir=None
     ):
         """
         fetch data from the database and generate nudge file
@@ -705,9 +872,11 @@ class Nudge:
         """
 
         outdir = pathlib.Path(outdir)
-        if hycom_download_dir is None:  # create new download dir
-            hycom_download_dir = f'{outdir}/HYCOM_files/'
-            os.makedirs(hycom_download_dir, exist_ok=True)
+        if archive_netcdf:  # create new download dir
+            if archivedir is None:
+                archivedir = outdir
+            archivedir = pathlib.Path(f'{archivedir}')
+            archivedir.mkdir(exist_ok=True,parents=True)     
 
         self.start_date = start_date
         self.rnday=rnday
@@ -716,7 +885,13 @@ class Nudge:
             self.start_date + timedelta(days=self.rnday+1),
             timedelta(days=1)).astype(datetime)
 
-        vd=Vgrid.open(vgrid)
+        if isinstance(vgrid,os.PathLike):
+            vd=Vgrid.open(vgrid)
+        elif isinstance(vgrid,Vgrid):
+            vd = vgrid
+        else:
+            raise('Incorrect vgrid input -- Nudge.fetch_data needs vgrid as a type os.PathLike or pyschism.mesh.Vgrid')
+
         sigma=vd.sigma
         sigma[np.isnan(sigma)]=-1
         #define nudge zone and strength
@@ -824,34 +999,45 @@ class Nudge:
                 bxyz=np.c_[zcor2.reshape(np.size(zcor2)),y2i.reshape(np.size(y2i)),x2i.reshape(np.size(x2i))]
                 logger.info('Computing SCHISM zcor is done!')
 
-                xmin, xmax = np.min(nlon), np.max(nlon)
-                ymin, ymax = np.min(nlat), np.max(nlat)
+                xmin = floor_2_decimals(np.min(nlon))
+                xmax = ceil_2_decimals(np.max(nlon))
+                ymin= floor_2_decimals(np.min(nlat))
+                ymax = ceil_2_decimals(np.max(nlat))
                 bbox = Bbox.from_extents(xmin, ymin, xmax, ymax)
                 logger.info(f'bbox for nudge is {bbox}')
 
                 time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, _ = get_idxs(date, database, bbox, lonc=nlonc, latc=nlatc)
+
+                if date >= datetime.utcnow():
+                    date2 = datetime.utcnow() - timedelta(days=1)
+                    url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
+                        f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
+                        f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
+                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
+                else:
+                    url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
+                        f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
+                        f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
+                        f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
+            
                 # Generate a local copy of the HYCOM file for future use
-                hycom_local_copy = f'{hycom_download_dir}/hycom_{date.strftime("%Y%m%d")}_bnd_{ibnd}_TS.nc'
-                if not os.path.exists(hycom_local_copy):
-                    logger.info(f'Local copy of HYCOM file {hycom_local_copy} does not exist. Downloading...')
-                    if date >= datetime.utcnow():
-                        date2 = datetime.utcnow() - timedelta(days=1)
-                        url = f'https://tds.hycom.org/thredds/dodsC/{database}/FMRC/runs/GLBy0.08_930_FMRC_RUN_' + \
-                            f'{date2.strftime("%Y-%m-%dT12:00:00Z")}?depth[0:1:-1],lat[{lat_idx1}:1:{lat_idx2}],' + \
-                            f'lon[{lon_idx1}:1:{lon_idx2}],time[{time_idx}],' + \
-                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-
-                    else:
-                        url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
-                            f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
-                            f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                            f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
-                    # Download the data
-                    xr.open_dataset(url).to_netcdf(hycom_local_copy)
-
-                # load the dataset from the local cached NetCDF file
-                ds = Dataset(hycom_local_copy)
+                if archive_netcdf:
+                    hycom_fname = archivedir / f'hycom_{date.strftime("%Y%m%d_%H")}_{xmin:0.3f}_{xmax:0.3f}E__{ymin:0.3f}_{ymax:0.3f}N.nc'
+                    if not hycom_fname.exists():
+                        logger.info(f'Local copy of HYCOM file {hycom_fname} does not exist.')
+                        logger.info(f'Downloading HYCOM data from {database} ... ')
+                        xr.open_dataset(url).to_netcdf(hycom_fname)
+                        logger.info(f'Data saved to {hycom_fname.resolve()}')
+                    try:
+                        logger.info(f'Reading HYCOM file: {hycom_fname}')
+                        ds=Dataset(hycom_fname)
+                    except:
+                        logger.info(f'Failed to open local copy of HYCOM file {hycom_fname} ... Downloading...')
+                        ds=Dataset(url)
+                else:
+                    logger.info(f'Downloading HYCOM data from {database} ... ')
+                    ds=Dataset(url)
 
                 salt=np.squeeze(ds['salinity'][:,:,:])
                 temp=np.squeeze(ds['water_temp'][:,:,:])
@@ -860,11 +1046,12 @@ class Nudge:
                 dep=ds['depth'][:]
                 ptemp = ConvertTemp(salt, temp, dep)
 
-                logger.info('****Interpolation starts****')
+                logger.info(f'****Interpolation starts for boundary {ibnd}****')
 
                 #ndt[it]=it
                 #salt
                 dst_salt['time'][it] = it
+                logger.info(f'interp_to_points_3d(dep, y2, x2, bxyz, salt)')
                 salt_int = interp_to_points_3d(dep, y2, x2, bxyz, salt)
                 salt_int = salt_int.reshape(zcor2.shape)
                 #timeseries_s[it,:,:,0]=salt_int
@@ -872,6 +1059,7 @@ class Nudge:
 
                 #temp
                 dst_temp['time'][it] = it
+                logger.info(f'interp_to_points_3d(dep, y2, x2, bxyz, ptemp)')
                 temp_int = interp_to_points_3d(dep, y2, x2, bxyz, ptemp)
                 temp_int = temp_int.reshape(zcor2.shape)
                 #timeseries_t[it,:,:,0]=temp_int
@@ -886,10 +1074,24 @@ class Nudge:
 
 class DownloadHycom:
 
+    """
+        Generate ocean boundary condition data by:
+
+        1. download data with fetch_data using fmt='schism'
+    
+        2. Compile and run "schism/src/Utility/Gen_Hotstart/gen_3Dth_from_hycom.f90" in schism repo,
+                expects (1) hgrid.gr3; (2) hgrid.ll; (3) vgrid.in;'
+
+        Or:
+        
+        1. just download hycom data with fmt='hycom'    
+
+    """
+
     def __init__(self, hgrid=None, bbox=None):
 
         if hgrid is None and bbox is None:
-            raise ValueError('Either hgrid or bbox must be provided!')
+            print('Either hgrid or bbox must be provided to use fetch_data()')
 
         if hgrid is not None:
             xmin, xmax = hgrid.coords[:, 0].min(), hgrid.coords[:, 0].max()
@@ -898,7 +1100,7 @@ class DownloadHycom:
         elif bbox is not None:
             self.bbox = bbox
 
-    def fetch_data(self, start_date, rnday=1, fmt='schism', bnd=False, nudge=False, sub_sample=1, outdir='./'):
+    def fetch_data(self, start_date, rnday=1, fmt='schism', bnd=False, nudge=False, time_stride=8, lon_stride=1, lat_stride=1,outdir='./', overwrite=False):
         '''
         start_date: datetime.datetime
         rnday: integer
@@ -906,44 +1108,199 @@ class DownloadHycom:
         bnd: file names are SSH_*.nc, TS_*.nc, UV_*.nc used in gen_hot_3Dth_from_hycom.f90
         nudge: file name is TS_*.nc used in gen_nudge_from_hycom.f90
         outdir: directory for output files
+        lon_stide,lat_stide : integer, stride along lon and lat dimension to sub sample data (or not)
+        time_stride: integer
+            Stride along HYCOM time dimension within each daily file.
+            time_stride=1 downloads all times; 2 would take every other timestep, etc.
+
+        Example: fmt='schism 
+
+        netcdf hycom_20041230 {
+        dimensions:
+                depth = 40 ;
+                lat = 223 ;
+                lon = 390 ;
+                time = 1 ;
+        variables:
+                double depth(depth) ;
+                        depth:_FillValue = NaN ;
+                        depth:long_name = "Depth" ;
+                        depth:standard_name = "depth" ;
+                        depth:units = "m" ;
+                        depth:positive = "down" ;
+                        depth:axis = "Z" ;
+                        depth:NAVO_code = 5 ;
+                double lat(lat) ;
+                        lat:_FillValue = NaN ;
+                        lat:long_name = "Latitude" ;
+                        lat:standard_name = "latitude" ;
+                        lat:units = "degrees_north" ;
+                        lat:axis = "Y" ;
+                        lat:NAVO_code = 1 ;
+                double lon(lon) ;
+                        lon:_FillValue = NaN ;
+                        lon:long_name = "Longitude" ;
+                        lon:standard_name = "longitude" ;
+                        lon:units = "degrees_east" ;
+                        lon:point_spacing = "even" ;
+                        lon:modulo = "360 degrees" ;
+                        lon:axis = "X" ;
+                        lon:NAVO_code = 2 ;
+                double time(time) ;
+                        time:_FillValue = NaN ;
+                        time:long_name = "Valid Time" ;
+                        time:time_origin = "2000-01-01 00:00:00" ;
+                        time:axis = "T" ;
+                        time:NAVO_code = 13 ;
+                        time:units = "hours since 2000-01-01" ;
+                        time:calendar = "gregorian" ;
+                short water_u(time, depth, lat, lon) ;
+                        water_u:_FillValue = -30000s ;
+                        water_u:long_name = "Eastward Water Velocity" ;
+                        water_u:standard_name = "eastward_sea_water_velocity" ;
+                        water_u:units = "m/s" ;
+                        water_u:NAVO_code = 17 ;
+                        water_u:add_offset = 0.f ;
+                        water_u:scale_factor = 0.001f ;
+                        water_u:missing_value = -30000s ;
+                short water_v(time, depth, lat, lon) ;
+                        water_v:_FillValue = -30000s ;
+                        water_v:long_name = "Northward Water Velocity" ;
+                        water_v:standard_name = "northward_sea_water_velocity" ;
+                        water_v:units = "m/s" ;
+                        water_v:NAVO_code = 18 ;
+                        water_v:add_offset = 0.f ;
+                        water_v:scale_factor = 0.001f ;
+                        water_v:missing_value = -30000s ;
+                short water_temp(time, depth, lat, lon) ;
+                        water_temp:_FillValue = -30000s ;
+                        water_temp:long_name = "Water Temperature" ;
+                        water_temp:standard_name = "sea_water_temperature" ;
+                        water_temp:units = "degC" ;
+                        water_temp:NAVO_code = 15 ;
+                        water_temp:comment = "in-situ temperature" ;
+                        water_temp:add_offset = 20.f ;
+                        water_temp:scale_factor = 0.001f ;
+                        water_temp:missing_value = -30000s ;
+                short salinity(time, depth, lat, lon) ;
+                        salinity:_FillValue = -30000s ;
+                        salinity:long_name = "Salinity" ;
+                        salinity:standard_name = "sea_water_salinity" ;
+                        salinity:units = "psu" ;
+                        salinity:NAVO_code = 16 ;
+                        salinity:add_offset = 20.f ;
+                        salinity:scale_factor = 0.001f ;
+                        salinity:missing_value = -30000s ;
+                short surf_el(time, lat, lon) ;
+                        surf_el:_FillValue = -30000s ;
+                        surf_el:long_name = "Water Surface Elevation" ;
+                        surf_el:standard_name = "sea_surface_elevation" ;
+                        surf_el:units = "m" ;
+                        surf_el:NAVO_code = 32 ;
+                        surf_el:add_offset = 0.f ;
+                        surf_el:scale_factor = 0.001f ;
+                        surf_el:missing_value = -30000s ;
+
+        // global attributes:
+                        :classification_level = "UNCLASSIFIED" ;
+                        :distribution_statement = "Approved for public release. Distribution unlimited." ;
+                        :downgrade_date = "not applicable" ;
+                        :classification_authority = "not applicable" ;
+                        :institution = "Naval Oceanographic Office" ;
+                        :source = "HYCOM archive file" ;
+                        :history = "archv2ncdf3z" ;
+                        :field_type = "instantaneous" ;
+        
+
         '''
+
+        # --- build list of days (one output file per day)
         if rnday == 1:
             timevector = [start_date]
         else:
-            timevector = np.arange(
-                start_date, start_date + timedelta(days=rnday+1), timedelta(days=1)
-            ).astype(datetime)
+            timevector = np.arange(start_date, start_date+timedelta(days=rnday), timedelta(days=1)).astype(datetime)
 
-        for i, date in enumerate(timevector):
-            database=get_database(date)
-            logger.info(f'Fetching data for {date} from database {database}')
-            print(f'Fetching data for {date} from database {database}')
-            time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, isLonSame = get_idxs(date, database, self.bbox)
+        coord_cache={}
+        for i, date in enumerate(tqdm(timevector, desc="Downloading HYCOM daily files", unit="day")):
+            
+            tqdm.write(f"Starting {date:%Y-%m-%d}")
 
-            url_ssh = f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:{sub_sample}:{lat_idx2}],' + \
-                f'lon[{lon_idx1}:{sub_sample}:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
-                f'surf_el[{time_idx}][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}],' + \
-                f'water_u[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}],' + \
-                f'water_v[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}],' + \
-                f'water_temp[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}],' + \
-                f'salinity[{time_idx}][0:1:39][{lat_idx1}:{sub_sample}:{lat_idx2}][{lon_idx1}:{sub_sample}:{lon_idx2}]'
+            # Normalize to midnight for "daily" files
+            day_start = datetime(date.year, date.month, date.day)
+            day_end   = day_start + timedelta(days=1)
 
-            foutname = pathlib.Path(outdir) / f'hycom_{date.strftime("%Y%m%d")}.nc'
+            foutname = pathlib.Path(outdir) / f'hycom_{day_start.strftime("%Y%m%d")}.nc'
+
+            if foutname.exists() and not overwrite:
+                print(f'{foutname} exists and overwrite=False ... skipping ...')
+                continue
+
+            database = get_database(day_start)
+            logger.info(f'Fetching data for {day_start} from database {database}')
+            print(f'Fetching data for {day_start} from database {database}')
+
+            # time_idx, lon_idx1, lon_idx2, lat_idx1, lat_idx2, x2, y2, isLonSame = get_idxs(day_start, database, self.bbox)
+            #
+            # # --- get full time range for day
+            # t_start, t_end = get_time_range_indices(database, day_start, day_end)
+            # if t_start is None:
+            #     logger.warning(f'No HYCOM times found for {day_start} in {database} ... skipping ...')
+            #     print(f'No HYCOM times found for {day_start} in {database} ... skipping ...')
+            #     continue
+            #
+            # # OPeNDAP time slice string (inclusive end index)
+            # tsel = f'{t_start}:{time_stride}:{t_end}'
+
+            database_idx = get_idxs_and_time_range(day_start, database, self.bbox, cache=coord_cache)
+            t_start=database_idx[0]
+            t_end=database_idx[1]
+            lon_idx1=database_idx[2]
+            lon_idx2=database_idx[3]
+            lat_idx1=database_idx[4]
+            lat_idx2=database_idx[5]
+            x2=database_idx[6]
+            y2=database_idx[7]
+            isLonSame=database_idx[8]
+            day_start_used=database_idx[9]
+
+            if t_start is None:
+                print(f'No HYCOM data for {day_start} ... skipping ...')
+                continue
+
+            # if missing and shifted forward, you may want the filename to follow the actual data day:
+            foutname = pathlib.Path(outdir) / f'hycom_{day_start_used.strftime("%Y%m%d")}.nc'
+
+            tsel = f'{t_start}:{time_stride}:{t_end}'
+
+            url_ssh = (
+                f'https://tds.hycom.org/thredds/dodsC/{database}?'
+                f'lat[{lat_idx1}:{lat_stride}:{lat_idx2}],'
+                f'lon[{lon_idx1}:{lon_stride}:{lon_idx2}],'
+                f'depth[0:1:-1],'
+                f'time[{tsel}],'
+                f'surf_el[{tsel}][{lat_idx1}:{lat_stride}:{lat_idx2}][{lon_idx1}:{lon_stride}:{lon_idx2}],'
+                f'water_u[{tsel}][0:1:39][{lat_idx1}:{lat_stride}:{lat_idx2}][{lon_idx1}:{lon_stride}:{lon_idx2}],'
+                f'water_v[{tsel}][0:1:39][{lat_idx1}:{lat_stride}:{lat_idx2}][{lon_idx1}:{lon_stride}:{lon_idx2}],'
+                f'water_temp[{tsel}][0:1:39][{lat_idx1}:{lat_stride}:{lat_idx2}][{lon_idx1}:{lon_stride}:{lon_idx2}],'
+                f'salinity[{tsel}][0:1:39][{lat_idx1}:{lat_stride}:{lat_idx2}][{lon_idx1}:{lon_stride}:{lon_idx2}]'
+            )
 
             if fmt == 'schism':
-                #foutname = f'TS_{i+1}.nc'
+
                 logger.info(f'filename is {foutname}')
+
                 ds = xr.open_dataset(url_ssh)
 
-                #convert in-situ temperature to potential temperature
+                # convert in-situ temperature to potential temperature
                 temp = ds.water_temp.values
                 salt = ds.salinity.values
-                dep = ds.depth.values
+                dep  = ds.depth.values
 
                 ptemp = ConvertTemp(salt, temp, dep)
-                #drop water_temp variable and add new temperature variable
+
+                # drop water_temp variable and add new temperature variable
                 ds = ds.drop('water_temp')
-                ds['temperature']=(['time','depth','lat','lon'], ptemp)
+                ds['temperature'] = (['time', 'depth', 'lat', 'lon'], ptemp)
                 ds.temperature.attrs = {
                     'long_name': 'Sea water potential temperature',
                     'standard_name': 'sea_water_potential_temperature',
@@ -954,41 +1311,81 @@ class DownloadHycom:
                     logger.info('Lon is not the same!')
                     ds = convert_longitude(ds, self.bbox)
 
-                ds = ds.rename_dims({'lon':'xlon'})
-                ds = ds.rename_dims({'lat':'ylat'})
-                ds = ds.rename_vars({'lat':'ylat'})
-                ds = ds.rename_vars({'lon':'xlon'})
+                ds = ds.rename_dims({'lon': 'xlon'})
+                ds = ds.rename_dims({'lat': 'ylat'})
+                ds = ds.rename_vars({'lat': 'ylat'})
+                ds = ds.rename_vars({'lon': 'xlon'})
 
-                t0 =  time()
-                logger.info(f'Start writing nc file!')
-                ds.to_netcdf(foutname, 'w', unlimited_dims='time', encoding={'temperature':{'dtype': 'h', '_FillValue': -30000.,'scale_factor': 0.001, 'add_offset': 20., 'missing_value': -30000.}})
+                t0 = time()
+                logger.info('Start writing nc file!')
+                ds.to_netcdf(
+                    foutname, 'w',
+                    unlimited_dims='time',
+                    encoding={ 
+                        'temperature': {
+                            'dtype': 'h',
+                            '_FillValue': -30000.,
+                            'scale_factor': 0.001,
+                            'add_offset': 20.,
+                            'missing_value': -30000.
+                        }
+                    }
+                )
                 ds.close()
-                logger.info(f'It took {time()-t0} seconds to write nc file!')
-
-                #link output file to Fortran required files
-                dir_path = os.path.abspath(outdir)
-                logger.info(f'current dir is {dir_path}')
-                src = f'{dir_path}/{foutname}'
-                if bnd:
-                    names = ['SSH', 'TS', 'UV']
-                    for name in names:
-                        dst = f'{dir_path}/{name}_{i+1}.nc'
-                        os.symlink(src, dst)
-                elif nudge:
-                        dst = f'{dir_path}/TS_{i+1}.nc'
-                        os.symlink(src, dst)
+                logger.info(f'It took {time() - t0} seconds to write nc file')
 
             elif fmt == 'hycom':
-                #url=f'https://tds.hycom.org/thredds/dodsC/{database}?lat[{lat_idx1}:1:{lat_idx2}],' + \
-                #    f'lon[{lon_idx1}:1:{lon_idx2}],depth[0:1:-1],time[{time_idx}],' + \
-                #    f'surf_el[{time_idx}][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                #    f'water_temp[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                #    f'salinity[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                #    f'water_u[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}],' + \
-                #    f'water_v[{time_idx}][0:1:39][{lat_idx1}:1:{lat_idx2}][{lon_idx1}:1:{lon_idx2}]'
 
-                #foutname = f'hycom_{date.strftime("%Y%m%d")}.nc'
                 ds = xr.open_dataset(url_ssh)
                 ds.to_netcdf(foutname, 'w')
-
                 ds.close()
+
+        if fmt == 'schism':
+            self.make_sym_links(outdir=outdir, timevector=timevector, bnd=bnd, nudge=nudge)
+
+    def make_sym_links(self, outdir=pathlib.Path('./'), datadir=None, start_date=None, rnday=None, timevector=None, bnd=True, nudge=False):
+        
+        if timevector is None:
+            if rnday == 1:
+                timevector = [start_date]
+            else:
+                timevector = np.arange(
+                    start_date, start_date + timedelta(days=rnday+1), timedelta(days=1)
+                ).astype(datetime)
+
+        for i, date in enumerate(timevector):
+
+            if datadir is None:
+                src_dir = pathlib.Path(outdir).resolve()
+                dst_dir = pathlib.Path(outdir).resolve()
+            else:
+                src_dir = pathlib.Path(datadir).resolve()
+                dst_dir = pathlib.Path(outdir).resolve()
+ 
+            foutname = pathlib.Path(src_dir) / f'hycom_{date.strftime("%Y%m%d")}.nc'
+
+            logger.info(f'src dir is {src_dir}')
+            logger.info(f'dst dir is {dst_dir}')
+
+            src = dst_dir / foutname
+
+            if not src.exists():
+                raise FileNotFoundError(f"Source file does not exist: {src}")
+
+            if bnd:
+                names = ['SSH', 'TS', 'UV']
+                for name in names:
+                    dst = dst_dir / f"{name}_{i+1}.nc"
+                    # remove existing symlink or file at destination
+                    if dst.is_symlink():
+                        dst.unlink()
+                    elif dst.exists():
+                        raise FileExistsError(f"{dst} exists and is not a symlink; refusing to overwrite.")
+                    os.symlink(src, dst)   # src/dst are Path-like; works on modern Python
+            elif nudge:
+                dst = dst_dir / f"TS_{i+1}.nc"
+                if dst.is_symlink():
+                    dst.unlink()
+                elif dst.exists():
+                    raise FileExistsError(f"{dst} exists and is not a symlink; refusing to overwrite.")
+                os.symlink(src, dst)

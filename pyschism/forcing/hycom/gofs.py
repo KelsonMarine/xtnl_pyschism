@@ -997,12 +997,12 @@ class GOFSSalinity(GOFSComponent):
 class GOFS(Hycom):
     '''Public interface for GOFS model forcings.'''
 
-    def __init__(self):
+    def __init__(self,resource=None):
         self._elevation = GOFSElevation()
         self._velocity = GOFSVelocity()
         self._temperature = GOFSTemperature()
         self._salinity = GOFSSalinity()
-
+        self.resource = resource # need to implement
     @property
     def elevation(self) -> GOFSElevation:
         return self._elevation

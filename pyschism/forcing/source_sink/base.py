@@ -618,6 +618,7 @@ class HGridElementPairings:
         """
 
         # hull: shapely Polygon from hgrid
+        logger.info(f'HGridElementPairings getting hgrid hull geometry buffer ({buffer})')
         H = hgrid.hull().iloc[0].geometry.buffer(buffer)
         self._hgrid = hgrid
         if ds is not None:
@@ -636,15 +637,17 @@ class HGridElementPairings:
             self.source_lon=lon[mask]
             self.source_lat=lat[mask]
 
+        logger.info(f'# input sources: {len(points)}')
+        logger.info(f'# used sources after mask: {self.source.shape[0]}')
+
         # Generate element centroids KDTree
         # NOTE! Could use hgrid.elements.compute_centroid() to get lon,lat,depth of element ...
         # ... but this may miss a dry node (and thus element) ... so use for loop
-        print('Pairing source elements ... ')
+        logger.info(f'Pairing source elements with KDTree (depth_threshold: {depth_threshold})')
 
         # get elements in mesh hull
         x_centr, y_centr, dp_centr = hgrid.elements.compute_centroid()
         
-
         # --- get element id
         # similar to .triangle property for a mesh with all triangles 
         ar = hgrid.elements.array # 0-based index of element
@@ -680,6 +683,9 @@ class HGridElementPairings:
         self.element_centroid_lon = element_centroid_lon[idxs]
         self.element_centroid_lat = element_centroid_lat[idxs]
         self.element_mean_depth = element_mean_depth[idxs]
+
+        for i,i_id in enumerate(self.element_id):
+            logger.info(f'source element: {self.element_id[i]} ({self.element_centroid_lon[i]}, {self.element_centroid_lat[i]}, {self.element_mean_depth[i]})')
 
         # # debug
 

@@ -236,4 +236,10 @@ class SaltIc(IcField):
 
 
 class Estuary(Gr3Field):
-    pass
+    # For use with:
+    # https://github.com/schism-dev/schism/blob/master/src/Utility/Gen_Hotstart/gen_hot_from_hycom.f90
+    #   depth=0: outside estuary;
+    #   depth=1: inside
+    @classmethod
+    def default(cls, hgrid):
+        return cls.constant(hgrid, 0.0)

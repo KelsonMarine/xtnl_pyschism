@@ -60,7 +60,8 @@ class Param:
     def write(self, path, overwrite=False, use_template=False):
         path = pathlib.Path(path)
         if path.is_file() and not overwrite:
-            raise IOError(f"File {path} exists and overwrite=False")
+            print(f"File {path} exists and overwrite=False ... skipping ...")
+            return
         
         # if use_template:
         #     core_dict = self.core.to_dict()

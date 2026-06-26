@@ -121,7 +121,7 @@ class SCHOUT(
             iout_sta: Union[bool, int] = False,
             nspool_sta: int = None,
             template: Union[bool, str, os.PathLike, dict, f90nml.namelist.Namelist] = None,
-            verbose: bool = True,
+            verbose: bool = False,
             **outputs
     ):
         """

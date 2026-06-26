@@ -161,12 +161,12 @@ class ERA5DataInventory:
             if isinstance(datadir,pathlib.Path):
                 self._tmpdir_path = datadir
             elif isinstance(datadir,list):
-                if isinstance(datadir[0],pathlib.Path):
-                    self._tmpdir_path = datadir[0].parent
-                    self._files = datadir
-                else: 
-                    self._tmpdir_path = pathlib.Path(datadir[0])
-                    self._files = [pathlib.Path(f) for f in datadir]
+                # if isinstance(datadir[0],pathlib.Path):
+                #     self._tmpdir_path = datadir[0].parent
+                #     self._files = datadir
+                # else: 
+                self._tmpdir_path = pathlib.Path(datadir[0])
+                self._files = [pathlib.Path(f) for f in datadir]
 
 
     def _download_and_process_data(self):
